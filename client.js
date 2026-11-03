@@ -40,8 +40,6 @@ window.__ModuleLoader__.load({
     const zh = {
       nav: '使用统计',
       'page.title': '使用统计',
-      'page.scope': '应用用量',
-      'page.scopeHint': '本机所有会话的累计用量',
       'page.source': '数据来自本机会话日志，仅在本机统计。',
       'stats.total': '累计 Token 数',
       'stats.peak': '峰值 Token 数',
@@ -92,8 +90,6 @@ window.__ModuleLoader__.load({
     const en = {
       nav: 'Usage',
       'page.title': 'Usage Statistics',
-      'page.scope': 'App usage',
-      'page.scopeHint': 'Everything this app has recorded locally',
       'page.source': 'Computed from local session logs only; nothing leaves this machine.',
       'stats.total': 'Total tokens',
       'stats.peak': 'Peak tokens',
@@ -144,9 +140,8 @@ window.__ModuleLoader__.load({
     const CSS = `
 .us-root{display:flex;flex-direction:column;gap:16px;max-width:820px;min-width:0;color:var(--dsw-alias-label-primary);font-family:var(--dsh-font-family-text,inherit);font-size:14px;line-height:22px;--us-heat-0:#EBEDF0;--us-heat-1:rgba(77,107,254,.20);--us-heat-2:rgba(77,107,254,.42);--us-heat-3:rgba(77,107,254,.68);--us-heat-4:#4D6BFE}
 .us-root[data-scheme=dark]{--us-heat-0:#23252B;--us-heat-1:rgba(109,139,255,.24);--us-heat-2:rgba(109,139,255,.48);--us-heat-3:rgba(109,139,255,.74);--us-heat-4:#6D8BFF}
-.us-header{display:flex;align-items:center;gap:10px;min-width:0}
-.us-title{margin:0;font-size:20px;line-height:28px;font-weight:500;color:var(--dsw-alias-label-primary)}
-.us-scope{box-sizing:border-box;display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;white-space:nowrap}
+.us-title{margin:0;font-size:16px;line-height:24px;font-weight:500;color:var(--dsw-alias-label-primary)}
+.us-navIcon{display:block;flex:none;color:inherit}
 .us-card{box-sizing:border-box;border:.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l1));border-radius:var(--dsw-radius-xl,var(--dsw-radius-lg));background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-1))}
 .us-stats{display:flex;align-items:stretch;padding:18px 4px}
 .us-stat{display:flex;flex:1 1 0;flex-direction:column;align-items:center;gap:2px;min-width:0;padding:0 16px;text-align:center}
@@ -680,17 +675,123 @@ window.__ModuleLoader__.load({
       return path
     }
 
-    /** Bar-chart glyph used in the page header. */
-    function StatsIcon(props) {
-      const size = props?.size ?? 20
-      return h(
-        'svg',
-        { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': 'true' },
-        h('path', { d: 'M3.5 20.5h17' }),
-        h('path', { d: 'M7 20.5V12.5' }),
-        h('path', { d: 'M12 20.5V5.5' }),
-        h('path', { d: 'M17 20.5V9' }),
-      )
+    /** Bar-chart glyph shared with the plugin icon asset. */
+    const CHART_PATHS = Object.freeze([
+      'M3.5 20.5h17',
+      'M7 20.5V12.5',
+      'M12 20.5V5.5',
+      'M17 20.5V9',
+    ])
+    /** The settings panel portaled by the host shell; not a plugin-owned node. */
+    const NAV_PANEL_SELECTOR = '[data-shortcut-modal="settings"]'
+    const NAV_ICON_CLASS = 'us-navIcon'
+    /** Marked on a decorated button so repeat syncs stay cheap and idempotent. */
+    const NAV_MARK = 'usNavIcon'
+    const NAV_MARK_ATTR = 'data-us-nav-icon'
+    const NAV_ICON_SIZE = 16
+    const SVG_NS = 'http://www.w3.org/2000/svg'
+
+    /**
+     * The chart glyph as a real SVG node for the host settings nav.
+     *
+     * A browser-side plugin gets no icon registration hook: the settings shell
+     * hard-codes nav glyphs by section id and hands every plugin section the
+     * settings gear (dsh 0.2.1-rc.5). Mirroring `icon.svg` here keeps the entry
+     * marked with the plugin's own glyph.
+     */
+    function createSectionNavIcon(document) {
+      const svg = document.createElementNS(SVG_NS, 'svg')
+      svg.setAttribute('class', NAV_ICON_CLASS)
+      svg.setAttribute('width', String(NAV_ICON_SIZE))
+      svg.setAttribute('height', String(NAV_ICON_SIZE))
+      svg.setAttribute('viewBox', '0 0 24 24')
+      svg.setAttribute('fill', 'none')
+      svg.setAttribute('stroke', 'currentColor')
+      svg.setAttribute('stroke-width', '1.6')
+      svg.setAttribute('stroke-linecap', 'round')
+      svg.setAttribute('stroke-linejoin', 'round')
+      svg.setAttribute('aria-hidden', 'true')
+      svg.setAttribute('focusable', 'false')
+      for (const d of CHART_PATHS) {
+        const path = document.createElementNS(SVG_NS, 'path')
+        path.setAttribute('d', d)
+        svg.appendChild(path)
+      }
+      return svg
+    }
+
+    /**
+     * Replace the host's fallback gear on our settings entry with the chart.
+     *
+     * The native icon is hidden rather than removed because React still owns it;
+     * an unfamiliar host markup simply keeps showing the gear, so the patch can
+     * never break the panel.
+     */
+    function syncSectionNavIcon(root, label) {
+      if (root === null || root === undefined || typeof root.querySelectorAll !== 'function') return
+      if (typeof label !== 'string' || label.length === 0) return
+      for (const button of root.querySelectorAll('nav button')) {
+        if (button === null || typeof button.querySelector !== 'function') continue
+        // Idempotent: a decorated entry already carries this plugin's glyph.
+        if (button.querySelector('.' + NAV_ICON_CLASS) !== null) continue
+        const text = typeof button.textContent === 'string' ? button.textContent.trim() : ''
+        if (text !== label) continue
+        const nativeIcon = button.querySelector(':scope > svg:not(.' + NAV_ICON_CLASS + ')')
+        if (nativeIcon === null || nativeIcon === undefined) continue
+        const owner = button.ownerDocument
+        if (owner === null || owner === undefined || typeof owner.createElementNS !== 'function') continue
+        nativeIcon.style.display = 'none'
+        button.insertBefore(createSectionNavIcon(owner), nativeIcon)
+        if (button.dataset !== undefined) button.dataset[NAV_MARK] = 'true'
+      }
+    }
+
+    /**
+     * Keep the settings nav entry decorated while the panel is mounted.
+     *
+     * Watches the body only for the panel portal appearing or disappearing, then
+     * the panel itself for section/locale re-renders. Returns the disposer that
+     * restores the host glyph when the plugin unloads.
+     */
+    function installSettingsNavIcon(getLabel) {
+      if (typeof document === 'undefined' || document === null) return () => {}
+      if (typeof document.querySelector !== 'function' || typeof MutationObserver !== 'function') return () => {}
+      let navObserver = null
+      let navPanel = null
+      let bodyObserver = null
+      const decorate = () => {
+        const panel = document.querySelector(NAV_PANEL_SELECTOR)
+        if (navObserver !== null && panel !== navPanel) {
+          navObserver.disconnect()
+          navObserver = null
+          navPanel = null
+        }
+        if (panel === null) return
+        if (typeof getLabel === 'function') syncSectionNavIcon(panel, getLabel())
+        if (navObserver === null) {
+          navObserver = new MutationObserver(decorate)
+          navObserver.observe(panel, { childList: true, subtree: true, characterData: true })
+          navPanel = panel
+        }
+      }
+      decorate()
+      if (document.body !== null && document.body !== undefined) {
+        bodyObserver = new MutationObserver(decorate)
+        bodyObserver.observe(document.body, { childList: true })
+      }
+      return () => {
+        if (navObserver !== null) navObserver.disconnect()
+        if (bodyObserver !== null) bodyObserver.disconnect()
+        navObserver = null
+        bodyObserver = null
+        // Undo the decoration so a disabled plugin leaves the host nav intact.
+        for (const button of document.querySelectorAll(NAV_PANEL_SELECTOR + ' nav button[' + NAV_MARK_ATTR + ']')) {
+          for (const icon of button.querySelectorAll('.' + NAV_ICON_CLASS)) icon.remove()
+          const nativeIcon = button.querySelector(':scope > svg:not(.' + NAV_ICON_CLASS + ')')
+          if (nativeIcon !== null && nativeIcon !== undefined) nativeIcon.style.display = ''
+          if (button.dataset !== undefined) delete button.dataset[NAV_MARK]
+        }
+      }
     }
 
     /** Refresh glyph. */
@@ -724,15 +825,9 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** Header: page title plus the usage-scope pill. */
+    /** Header: the page title, at the host settings title scale. */
     function PageHeader(props) {
-      return h(
-        'div',
-        { className: 'us-header' },
-        h(StatsIcon, { size: 20 }),
-        h('h2', { className: 'us-title' }, props.title),
-        h('span', { className: 'us-scope', title: props.scopeHint }, props.scope),
-      )
+      return h('h2', { className: 'us-title' }, props.title)
     }
 
     /** The headline metrics, all sharing one number/unit pattern. */
@@ -1287,7 +1382,7 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'us-root', 'data-scheme': scheme },
           h('style', { 'data-plugin-css': `${PACKAGE}/UsageStats.module.css` }, CSS),
-          h(PageHeader, { title: t('page.title'), scope: t('page.scope'), scopeHint: t('page.scopeHint') }),
+          h(PageHeader, { title: t('page.title') }),
           h('div', { className: 'us-skeleton', 'aria-busy': 'true' }),
           h('p', { className: 'us-note' }, t('loading')),
         )
@@ -1300,7 +1395,7 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'us-root', 'data-scheme': scheme },
           h('style', { 'data-plugin-css': `${PACKAGE}/UsageStats.module.css` }, CSS),
-          h(PageHeader, { title: t('page.title'), scope: t('page.scope'), scopeHint: t('page.scopeHint') }),
+          h(PageHeader, { title: t('page.title') }),
           h(
             'section',
             { className: 'us-card us-state' },
@@ -1340,7 +1435,7 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'us-root', 'data-scheme': scheme },
         h('style', { 'data-plugin-css': `${PACKAGE}/UsageStats.module.css` }, CSS),
-        h(PageHeader, { title: t('page.title'), scope: t('page.scope'), scopeHint: t('page.scopeHint') }),
+        h(PageHeader, { title: t('page.title') }),
         snapshot.status === 'error'
           ? h(
               'div',
@@ -1461,6 +1556,8 @@ window.__ModuleLoader__.load({
 
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'usage-stats: dictionaries')
       const t = ctx.locale.bind(NS)
+
+      ctx.effect(() => installSettingsNavIcon(() => t('nav')), 'usage-stats: settings nav icon')
 
       ctx.effect(
         () =>
@@ -1598,6 +1695,10 @@ window.__ModuleLoader__.load({
       apply,
       __test: {
         CSS,
+        CHART_PATHS,
+        createSectionNavIcon,
+        syncSectionNavIcon,
+        installSettingsNavIcon,
         UsageStatsView,
         TokenActivityCard,
         TrendCard,

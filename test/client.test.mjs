@@ -417,6 +417,20 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
     ],
   )
 
+  // The header is just the title: no glyph, no usage-scope pill. The stub never
+  // renders components, so invoke PageHeader directly to inspect its output.
+  const headerElement = page.props.children.find(
+    (child) => child !== null && typeof child === 'object' && typeof child.type === 'function' && child.type.name === 'PageHeader',
+  )
+  assert.ok(headerElement !== undefined, 'the header is wired into the page')
+  assert.equal(headerElement.props.scope, undefined, 'no scope pill copy is passed')
+  assert.equal(headerElement.props.scopeHint, undefined, 'no scope hint is passed')
+  const header = headerElement.type(headerElement.props)
+  assert.equal(header.type, 'h2')
+  assert.equal(header.props.className, 'us-title')
+  assert.deepEqual(header.props.children, ['page.title'])
+  assert.equal(serialized.includes('us-scope'), false, 'the scope pill is gone')
+
   // Execute the two chart cards directly: their render paths are the newest code.
   const trendCard = helpers.TrendCard({ stats, windowDays: 8, chinese: true, t, scheme: 'dark' })
   const trendTree = JSON.stringify(trendCard, (key, value) => (typeof value === 'function' ? '[fn]' : value))
@@ -565,6 +579,105 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   assert.equal(/font-weight:\s*600/.test(css), false, 'no synthetic-bold weight anywhere')
   // The page inherits the harness text font instead of hard-coding a family.
   assert.ok(css.includes('font-family:var(--dsh-font-family-text,inherit)'))
+  // The header is a single title at the host settings title scale; the header
+  // glyph and the "应用用量" pill are gone.
+  assert.ok(css.includes('.us-title{margin:0;font-size:16px;line-height:24px;font-weight:500'), 'the title uses the host settings title scale')
+  assert.equal(css.includes('.us-scope'), false, 'the scope pill is gone')
+  assert.equal(css.includes('.us-header'), false, 'the title itself is the header')
+  assert.ok(css.includes('.us-navIcon{'), 'the injected nav glyph has its own rule')
+}
+
+// The settings shell hard-codes nav glyphs by section id, so the client decorates
+// its own entry: the host gear is hidden (never removed) and the chart takes its
+// slot; unmatched host markup is left untouched.
+{
+  const iconAsset = readFileSync(new URL('../icon.svg', import.meta.url), 'utf8')
+  const assetPaths = [...iconAsset.matchAll(/<path d="([^"]+)"/g)].map((match) => match[1])
+  assert.deepEqual(assetPaths, [...helpers.CHART_PATHS], 'the nav glyph mirrors icon.svg')
+
+  const created = []
+  const owner = {
+    createElementNS(namespace, tag) {
+      const node = {
+        tag,
+        attrs: {},
+        children: [],
+        style: {},
+        setAttribute(name, value) {
+          this.attrs[name] = String(value)
+        },
+        appendChild(child) {
+          this.children.push(child)
+          return child
+        },
+      }
+      created.push(node)
+      return node
+    },
+  }
+  const nativeIcon = { style: {} }
+  const button = {
+    dataset: {},
+    ownerDocument: owner,
+    textContent: ' 使用统计 ',
+    inserted: [],
+    querySelector(selector) {
+      if (selector === '.us-navIcon') return this.inserted.length > 0 ? this.inserted[0].node : null
+      if (selector === ':scope > svg:not(.us-navIcon)') return nativeIcon
+      return null
+    },
+    insertBefore(node, reference) {
+      this.inserted.push({ node, reference })
+    },
+  }
+  const root = { querySelectorAll: (selector) => (selector === 'nav button' ? [button] : []) }
+  helpers.syncSectionNavIcon(root, '使用统计')
+  assert.equal(nativeIcon.style.display, 'none', 'the host gear is hidden, not removed')
+  assert.equal(button.inserted.length, 1)
+  assert.equal(button.inserted[0].reference, nativeIcon, 'the chart takes the gear slot')
+  const icon = button.inserted[0].node
+  assert.equal(icon.attrs.class, 'us-navIcon')
+  assert.equal(icon.attrs.width, '16')
+  assert.equal(icon.attrs.height, '16')
+  assert.equal(icon.attrs.viewBox, '0 0 24 24')
+  assert.equal(icon.attrs['aria-hidden'], 'true')
+  assert.equal(icon.children.length, helpers.CHART_PATHS.length)
+  assert.deepEqual(icon.children.map((path) => path.attrs.d), [...helpers.CHART_PATHS])
+  assert.equal(button.dataset.usNavIcon, 'true')
+
+  helpers.syncSectionNavIcon(root, '使用统计')
+  assert.equal(button.inserted.length, 1, 'repeat syncs are idempotent')
+
+  let skipped = 0
+  const otherButton = {
+    dataset: {},
+    ownerDocument: owner,
+    textContent: '通用设置',
+    querySelector(selector) {
+      return selector === ':scope > svg:not(.us-navIcon)' ? nativeIcon : null
+    },
+    insertBefore() {
+      skipped += 1
+    },
+  }
+  helpers.syncSectionNavIcon({ querySelectorAll: () => [otherButton] }, '使用统计')
+  assert.equal(skipped, 0, 'other sections keep their own glyph')
+
+  const noGlyphButton = {
+    dataset: {},
+    ownerDocument: owner,
+    textContent: '使用统计',
+    querySelector: () => null,
+    insertBefore() {
+      skipped += 1
+    },
+  }
+  helpers.syncSectionNavIcon({ querySelectorAll: () => [noGlyphButton] }, '使用统计')
+  assert.equal(skipped, 0, 'unfamiliar host markup leaves the nav untouched')
+
+  const dispose = helpers.installSettingsNavIcon(() => 'usage-stats:nav')
+  assert.equal(typeof dispose, 'function')
+  dispose()
 }
 
 // The model row hover highlight is an inset rounded card, not a full-bleed
@@ -609,6 +722,9 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   // The streak metrics were removed; their unit keys must not come back.
   assert.equal(zhKeys.includes('unit.day'), false)
   assert.equal(zhKeys.includes('unit.daySuffix'), false)
+  // The usage-scope pill was removed with its copy.
+  assert.equal(zhKeys.includes('page.scope'), false)
+  assert.equal(zhKeys.includes('page.scopeHint'), false)
 }
 
 const events = []
@@ -709,6 +825,9 @@ assert.equal(localeRegistrations[0].namespace, 'usage-stats')
 assert.ok(localeRegistrations[0].dictionaries.zh.nav, 'Chinese dictionary is registered')
 assert.ok(localeRegistrations[0].dictionaries.en.nav, 'English dictionary is registered')
 assert.equal(localeRegistrations[0].dictionaries.zh['page.title'], '使用统计')
+assert.equal(localeRegistrations[0].dictionaries.zh['page.scope'], undefined, 'the scope pill copy is gone')
+assert.equal(localeRegistrations[0].dictionaries.en['page.scope'], undefined)
+assert.equal(localeRegistrations[0].dictionaries.zh['page.scopeHint'], undefined)
 
 assert.equal(events.length, 1)
 assert.equal(events[0].name, 'theme/change')
