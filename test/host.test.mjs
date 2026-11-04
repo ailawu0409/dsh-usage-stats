@@ -273,7 +273,7 @@ assert.equal(localDayKey(first), '2026-11-01')
     { model: 'm2', tokens: 30 },
     { model: 'm1', tokens: 15 },
   ])
-  assert.deepEqual(aggregate.sessions, { total: 3, counted: 2, skipped: 1, truncated: false })
+  assert.deepEqual(aggregate.sessions, { total: 3, counted: 2, skipped: 1, retired: 0, truncated: false })
   assert.equal(aggregate.daily.length, 2)
   assert.deepEqual(
     aggregate.daily.map((entry) => [entry.day, entry.turns]),
@@ -288,7 +288,24 @@ assert.equal(localDayKey(first), '2026-11-01')
   assert.equal(legacy.daily[0].turns, 0)
 }
 
-assert.equal(CACHE_VERSION, 2, 'the cache version changed when turns were added')
+{
+  // A retained fold keeps counting even though its Session is gone.
+  const aggregate = aggregateStats(
+    {
+      live: { activeMs: 5000, day: { '2026-11-01': { m1: 10 } }, dayTurns: { '2026-11-01': 1 } },
+      gone: { activeMs: 9000, day: { '2026-11-02': { m1: 40 } }, dayTurns: { '2026-11-02': 2 }, retiredAt: 123 },
+    },
+    { today: '2026-11-02', skipped: 0, total: 1 },
+  )
+  assert.equal(aggregate.totals.tokens, 50)
+  assert.equal(aggregate.totals.peakDay, '2026-11-02')
+  assert.equal(aggregate.totals.peakTokens, 40)
+  assert.equal(aggregate.totals.longestChatMs, 9000, 'a removed Session keeps the longest chat')
+  assert.deepEqual(aggregate.models, [{ model: 'm1', tokens: 50 }])
+  assert.deepEqual(aggregate.sessions, { total: 1, counted: 2, skipped: 0, retired: 1, truncated: false })
+}
+
+assert.equal(CACHE_VERSION, 3, 'the cache version changed when removed sessions started being retained')
 
 {
   const normalized = normalizeCache({
@@ -298,6 +315,19 @@ assert.equal(CACHE_VERSION, 2, 'the cache version changed when turns were added'
   })
   assert.equal(normalized.sessions.a.day['2026-11-01'].m1, 3)
   assert.deepEqual(normalized.sessions.a.dayTurns, { '2026-11-01': 4 })
+  assert.equal(normalized.sessions.a.retiredAt, null, 'a current-version entry is live')
+  // A v2 cache is migrated in place instead of being discarded.
+  const migrated = normalizeCache({
+    version: 2,
+    generatedAt: 5,
+    sessions: { a: { revision: 'r', day: { '2026-11-01': { m1: 3 } } } },
+  })
+  assert.equal(migrated.version, CACHE_VERSION, 'a v2 cache migrates to the current version')
+  assert.equal(migrated.sessions.a.day['2026-11-01'].m1, 3)
+  assert.equal(migrated.sessions.a.retiredAt, null)
+  // `retiredAt` survives normalization when valid and is dropped when not.
+  assert.equal(normalizeCache({ version: CACHE_VERSION, sessions: { a: { retiredAt: 123 } } }).sessions.a.retiredAt, 123)
+  assert.equal(normalizeCache({ version: CACHE_VERSION, sessions: { a: { retiredAt: -1 } } }).sessions.a.retiredAt, null)
   // Wrong version, junk entries, and junk days are dropped.
   assert.deepEqual(normalizeCache({ version: 99, sessions: { a: {} } }).sessions, {})
   assert.deepEqual(normalizeCache({ version: 1, sessions: { a: {} } }).sessions, {}, 'the old cache version is discarded')
@@ -337,7 +367,7 @@ await withStateDir(async (stateDir) => {
       { model: 'group/m1', tokens: 310 },
       { model: 'group/m2', tokens: 50 },
     ])
-    assert.deepEqual(stats.sessions, { total: 5, counted: 3, skipped: 2, truncated: false })
+    assert.deepEqual(stats.sessions, { total: 5, counted: 3, skipped: 2, retired: 0, truncated: false })
     assert.equal(stats.daily.length, 2)
     assert.deepEqual(
       stats.daily.map((entry) => [entry.day, entry.turns]),
@@ -398,7 +428,8 @@ await withStateDir(async (stateDir) => {
   }
 })
 
-// A cache left behind by a deleted session is pruned on the next scan.
+// A cache entry left behind by a deleted session keeps counting: deleting a
+// conversation must not rewrite its usage history.
 await withStateDir(async (stateDir) => {
   await mkdir(join(stateDir, 'plugin-state'), { recursive: true })
   await writeFile(
@@ -413,9 +444,130 @@ await withStateDir(async (stateDir) => {
   const host = boot(corpus(), { stateDir })
   try {
     const result = await host.service.command({ action: 'getStats' })
-    assert.equal(result.stats.totals.tokens, 360, 'the ghost entry is not counted')
+    assert.equal(result.stats.totals.tokens, 365, 'the removed session still counts')
+    assert.equal(result.stats.sessions.retired, 1)
     const cache = JSON.parse(await readFile(join(stateDir, 'plugin-state', 'usage-stats-cache.json'), 'utf8'))
-    assert.equal(cache.sessions.ghost, undefined, 'the ghost entry is pruned')
+    assert.ok(cache.sessions.ghost !== undefined, 'the entry is retained')
+    assert.ok(Number.isFinite(cache.sessions.ghost.retiredAt), 'the entry is marked retired')
+  } finally {
+    host.restore()
+  }
+})
+
+// Deleting a stored session between scans keeps its usage in the totals, and a
+// session that comes back is counted once and not re-read.
+await withStateDir(async (stateDir) => {
+  const first = boot(corpus(), { stateDir })
+  try {
+    const result = await first.service.command({ action: 'getStats' })
+    assert.equal(result.stats.totals.tokens, 360)
+  } finally {
+    first.restore()
+  }
+
+  const reduced = corpus().filter((entry) => entry.snapshot.header.id !== 'session-b')
+  const afterDelete = boot(reduced, { stateDir })
+  try {
+    const result = await afterDelete.service.command({ action: 'getStats' })
+    assert.equal(result.stats.totals.tokens, 360, 'deleting a session does not reduce the total')
+    assert.equal(result.stats.totals.peakTokens, 210, 'the deleted session keeps its peak day')
+    assert.deepEqual(result.stats.sessions, { total: 4, counted: 3, skipped: 2, retired: 1, truncated: false })
+    assert.deepEqual(afterDelete.reads, ['session-e'], 'the deleted session is not read')
+    const cache = JSON.parse(await readFile(join(stateDir, 'plugin-state', 'usage-stats-cache.json'), 'utf8'))
+    assert.ok(Number.isFinite(cache.sessions['session-b'].retiredAt), 'the deleted session is retained')
+  } finally {
+    afterDelete.restore()
+  }
+
+  const revived = boot(corpus(), { stateDir })
+  try {
+    const result = await revived.service.command({ action: 'getStats' })
+    assert.equal(result.stats.totals.tokens, 360, 'the revived session is not counted twice')
+    assert.equal(result.stats.sessions.retired, 0)
+    assert.deepEqual(revived.reads, ['session-e'], 'an unchanged revived session is not re-read')
+    const cache = JSON.parse(await readFile(join(stateDir, 'plugin-state', 'usage-stats-cache.json'), 'utf8'))
+    assert.equal(cache.sessions['session-b'].retiredAt, null)
+  } finally {
+    revived.restore()
+  }
+})
+
+// A failed re-read keeps the previous fold instead of dropping the session.
+await withStateDir(async (stateDir) => {
+  const first = boot(corpus(), { stateDir })
+  try {
+    const result = await first.service.command({ action: 'getStats' })
+    assert.equal(result.stats.totals.tokens, 360)
+  } finally {
+    first.restore()
+  }
+
+  const broken = corpus()
+  broken[0].snapshot.revision = 'rev-broken'
+  broken[0].fail = true
+  const host = boot(broken, { stateDir })
+  try {
+    const result = await host.service.command({ action: 'getStats' })
+    assert.equal(result.stats.totals.tokens, 360, 'a failed re-read keeps the last good fold')
+    assert.deepEqual(result.stats.sessions, { total: 5, counted: 3, skipped: 2, retired: 0, truncated: false })
+    assert.deepEqual([...host.reads].sort(), ['session-a', 'session-e'], 'the changed session is retried')
+  } finally {
+    host.restore()
+  }
+})
+
+// A session that never contributed anything leaves no history behind.
+await withStateDir(async (stateDir) => {
+  const withBlank = [...corpus(), storedSession('session-blank', day(2026, 11, 2), [])]
+  const first = boot(withBlank, { stateDir })
+  try {
+    const result = await first.service.command({ action: 'getStats' })
+    assert.equal(result.stats.totals.tokens, 360)
+  } finally {
+    first.restore()
+  }
+
+  const host = boot(corpus(), { stateDir })
+  try {
+    const result = await host.service.command({ action: 'getStats' })
+    assert.equal(result.stats.sessions.retired, 0, 'a blank session leaves no history')
+    const cache = JSON.parse(await readFile(join(stateDir, 'plugin-state', 'usage-stats-cache.json'), 'utf8'))
+    assert.equal(cache.sessions['session-blank'], undefined, 'the blank entry is dropped')
+  } finally {
+    host.restore()
+  }
+})
+
+// A v2 cache migrates in place, so an upgrade does not re-read everything.
+await withStateDir(async (stateDir) => {
+  await mkdir(join(stateDir, 'plugin-state'), { recursive: true })
+  await writeFile(
+    join(stateDir, 'plugin-state', 'usage-stats-cache.json'),
+    JSON.stringify({
+      version: 2,
+      generatedAt: 1,
+      sessions: {
+        'session-a': {
+          revision: 'rev-session-a',
+          sizeBytes: 1000,
+          day: { '2026-11-01': { 'group/m1': 100 } },
+          dayTurns: { '2026-11-01': 1 },
+          tokens: 100,
+        },
+      },
+    }),
+    'utf8',
+  )
+  const host = boot(corpus(), { stateDir })
+  try {
+    const result = await host.service.command({ action: 'getStats' })
+    // 310, not 360: session-a is served from the migrated v2 entry (100) instead
+    // of being re-read (150), which is exactly what the migration should do.
+    assert.equal(result.stats.totals.tokens, 310)
+    assert.deepEqual([...host.reads].sort(), ['session-b', 'session-c', 'session-e'], 'the cached v2 session is not re-read')
+    const cache = JSON.parse(await readFile(join(stateDir, 'plugin-state', 'usage-stats-cache.json'), 'utf8'))
+    assert.equal(cache.version, CACHE_VERSION)
+    assert.equal(cache.sessions['session-a'].retiredAt, null)
   } finally {
     host.restore()
   }

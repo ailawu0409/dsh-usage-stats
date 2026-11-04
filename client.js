@@ -85,6 +85,7 @@ window.__ModuleLoader__.load({
       'skipped': '已跳过 {count} 个会话（无法读取或正在迁移）',
       'truncated': '会话过多，仅统计了前 {count} 个',
       'sessions': '共统计 {count} 个会话',
+      'retained': '其中 {count} 个会话已不在列表中，历史用量仍计入',
     }
 
     const en = {
@@ -135,6 +136,7 @@ window.__ModuleLoader__.load({
       'skipped': 'Skipped {count} session(s) that could not be read',
       'truncated': 'Too many sessions; only the first {count} were counted',
       'sessions': 'Across {count} sessions',
+      'retained': 'Includes history from {count} session(s) no longer listed',
     }
 
     const CSS = `
@@ -1491,6 +1493,7 @@ window.__ModuleLoader__.load({
           { className: 'us-note' },
           [
             t('sessions', { count: stats.sessions.counted }),
+            stats.sessions.retired > 0 ? t('retained', { count: stats.sessions.retired }) : null,
             stats.sessions.skipped > 0 ? t('skipped', { count: stats.sessions.skipped }) : null,
             stats.sessions.truncated === true ? t('truncated', { count: stats.sessions.counted }) : null,
             t('page.source'),

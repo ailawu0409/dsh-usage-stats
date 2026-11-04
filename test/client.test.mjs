@@ -467,6 +467,35 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   assert.ok(JSON.stringify(sparse, (key, value) => (typeof value === 'function' ? '[fn]' : value)).includes('us-root'))
 }
 
+// Removed sessions are called out, while the session count still covers every
+// counted session (current ones plus retained history).
+{
+  const t = (key, parameters) => (parameters === undefined ? key : `${key}(${Object.values(parameters).join(',')})`)
+  const stats = {
+    today: '2026-11-03',
+    totals: { tokens: 100, peakDay: '2026-11-03', peakTokens: 100, longestChatMs: 0 },
+    daily: [{ day: '2026-11-03', tokens: 100, turns: 1, models: { m: 100 } }],
+    models: [{ model: 'm', tokens: 100 }],
+    sessions: { total: 2, counted: 4, skipped: 0, retired: 2 },
+  }
+  const render = (sessions) =>
+    helpers.UsageStatsView({
+      useStats: (selector) => selector({ status: 'ready', stats: { ...stats, sessions }, error: null, busy: false }),
+      useColorScheme: (selector) => selector({ scheme: 'light' }),
+      useLocale: (selector) => selector({ id: 'zh' }),
+      actions: { refresh: async () => {} },
+      t,
+    })
+  const tree = JSON.stringify(render(stats.sessions), (key, value) => (typeof value === 'function' ? '[fn]' : value))
+  assert.ok(tree.includes('retained(2)'), 'the note names the retained sessions')
+  assert.ok(tree.includes('sessions(4)'), 'the session count covers current and retained sessions')
+  const liveTree = JSON.stringify(
+    render({ total: 2, counted: 2, skipped: 0 }),
+    (key, value) => (typeof value === 'function' ? '[fn]' : value),
+  )
+  assert.equal(liveTree.includes('retained'), false, 'no retained note when every session is still listed')
+}
+
 // The heatmap summary must count only the window the grid draws, not the whole
 // 400-day payload the Host sends.
 {

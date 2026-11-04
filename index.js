@@ -12,7 +12,8 @@
  * Responsibilities:
  * - incremental scans keyed by the persistence `revision` (the documented
  *   change token for derived read-model caches);
- * - a durable per-session fold cache under `<profile>/plugin-state`;
+ * - a durable per-session fold cache under `<profile>/plugin-state` that keeps
+ *   the history of Sessions which are no longer stored;
  * - aggregation into the wire snapshot the Client renders.
  */
 import { readFileSync } from 'node:fs'
@@ -24,7 +25,9 @@ const PACKAGE = 'dsh-usage-stats'
 const SERVICE = 'usageStats'
 const INVOCATION_ID = `${PACKAGE}#${SERVICE}/command`
 const CACHE_FILE = 'usage-stats-cache.json'
-const CACHE_VERSION = 2
+const CACHE_VERSION = 3
+/** Versions that can be read and migrated forward without a full re-read. */
+const CACHE_COMPATIBLE_VERSIONS = new Set([2, 3])
 const DAY_MS = 86_400_000
 const READ_CONCURRENCY = 4
 const SCAN_DEADLINE_MS = 120_000
@@ -185,13 +188,15 @@ function normalizeCacheEntry(raw) {
     tokens: finiteOr(raw.tokens, 0),
     day,
     dayTurns,
+    // Set once the Session leaves persistence; the fold still counts as history.
+    retiredAt: Number.isFinite(raw.retiredAt) && raw.retiredAt > 0 ? raw.retiredAt : null,
   }
 }
 
 /** Validate a stored cache document, falling back to an empty cache. */
 function normalizeCache(raw) {
   const empty = { version: CACHE_VERSION, generatedAt: 0, sessions: {} }
-  if (!isPlainObject(raw) || raw.version !== CACHE_VERSION) return empty
+  if (!isPlainObject(raw) || !CACHE_COMPATIBLE_VERSIONS.has(raw.version)) return empty
   const sessions = {}
   if (isPlainObject(raw.sessions)) {
     for (const [id, entry] of Object.entries(raw.sessions)) {
@@ -215,9 +220,11 @@ function aggregateStats(sessions, meta) {
   let tokens = 0
   let longestChatMs = 0
   let counted = 0
+  let retired = 0
 
   for (const entry of Object.values(sessions)) {
     counted += 1
+    if (entry.retiredAt !== null && entry.retiredAt !== undefined) retired += 1
     if (entry.activeMs > longestChatMs) longestChatMs = entry.activeMs
     for (const [key, count] of Object.entries(entry.dayTurns ?? {})) {
       if (!Number.isFinite(count) || count <= 0) continue
@@ -274,6 +281,8 @@ function aggregateStats(sessions, meta) {
       total: meta.total,
       counted,
       skipped: meta.skipped,
+      // Sessions counted from a retained fold; they are no longer listed.
+      retired,
       truncated: meta.truncated === true,
     },
     totals: {
@@ -305,6 +314,12 @@ async function mapLimit(items, limit, run) {
   for (let index = 0; index < Math.min(limit, items.length); index += 1) workers.push(worker())
   await Promise.all(workers)
   return results
+}
+
+/** Whether a folded entry still contributes to any aggregate. */
+function contributes(entry) {
+  if (entry.tokens > 0 || entry.activeMs > 0) return true
+  return Object.keys(entry.day ?? {}).length > 0 || Object.keys(entry.dayTurns ?? {}).length > 0
 }
 
 /** Resolve the directory that owns plugin-owned durable state. */
@@ -429,6 +444,10 @@ export function apply(ctx) {
 
   /**
    * Scan every stored Session, re-reading only what changed, then aggregate.
+   *
+   * A Session that leaves the persistence listing (deleted, moved, or briefly
+   * unavailable) keeps its folded entry: the usage ledger must not shrink when
+   * the conversation it came from disappears.
    * @param {boolean} force re-read unchanged Sessions too
    */
   async function scan(force) {
@@ -442,52 +461,94 @@ export function apply(ctx) {
         return { error: { code: 'stats-unavailable', message: 'Session storage is unavailable' } }
       }
 
+      // The complete listing, even past MAX_SESSIONS: an entry that is still
+      // stored must never be mistaken for a removed one.
+      const listed = new Map()
+      for (const snapshot of snapshots) {
+        const id = typeof snapshot?.header?.id === 'string' ? snapshot.header.id : ''
+        if (id.length === 0) continue
+        listed.set(id, snapshot)
+      }
+      const total = listed.size
+      const truncated = total > MAX_SESSIONS
+      if (truncated) {
+        logger?.warn?.(`usage-stats: ${total} sessions exceed the ${MAX_SESSIONS} cap; only the first are counted`)
+      }
+
+      const now = Date.now()
       const next = {}
       const pending = []
       let skipped = 0
-      let total = 0
-      const truncated = snapshots.length > MAX_SESSIONS
-      if (truncated) {
-        logger?.warn?.(`usage-stats: ${snapshots.length} sessions exceed the ${MAX_SESSIONS} cap; only the first are counted`)
+      let dirty = false
+
+      /** Reuse a cached fold for a Session that is listed again. */
+      const revive = (entry) => {
+        if (entry.retiredAt === null || entry.retiredAt === undefined) return entry
+        dirty = true
+        return { ...entry, retiredAt: null }
       }
-      const now = Date.now()
-      for (const snapshot of snapshots.slice(0, MAX_SESSIONS)) {
-        const header = snapshot?.header
-        const id = typeof header?.id === 'string' ? header.id : ''
-        if (id.length === 0) continue
-        total += 1
+
+      // Keep the history of Sessions that are no longer stored. Dropping them
+      // here is what made the totals shrink after a delete.
+      for (const [id, entry] of Object.entries(cache.sessions)) {
+        if (listed.has(id)) continue
+        if (!contributes(entry)) {
+          dirty = true
+          continue
+        }
+        if (entry.retiredAt === null || entry.retiredAt === undefined) {
+          next[id] = { ...entry, retiredAt: now }
+          dirty = true
+        } else {
+          next[id] = entry
+        }
+      }
+
+      let processed = 0
+      for (const [id, snapshot] of listed) {
+        const cached = cache.sessions[id]
+        if (processed >= MAX_SESSIONS) {
+          // Over the cap: keep whatever history exists, but read no more.
+          if (cached !== undefined) next[id] = revive(cached)
+          continue
+        }
+        processed += 1
         if (snapshot.formatStatus === 'migration-required') {
-          skipped += 1
+          // The last readable fold is still the best available number.
+          if (cached !== undefined) next[id] = revive(cached)
+          else skipped += 1
           continue
         }
         const revision = typeof snapshot.revision === 'string' ? snapshot.revision : ''
         const sizeBytes = Number.isFinite(snapshot.sizeBytes) ? snapshot.sizeBytes : null
-        const cached = force ? undefined : cache.sessions[id]
-        if (cacheHit(cached, revision, sizeBytes)) {
-          next[id] = cached
+        if (!force && cacheHit(cached, revision, sizeBytes)) {
+          next[id] = revive(cached)
           continue
         }
         // A session that just failed is not retried on every scan; that kept
         // re-reading the same broken log and re-logging the same warning.
         const failedAt = failedSessions.get(id)
         if (!force && failedAt !== undefined && now - failedAt < FAILED_RETRY_MS) {
-          skipped += 1
+          if (cached !== undefined) next[id] = revive(cached)
+          else skipped += 1
           continue
         }
-        pending.push({ id, revision, sizeBytes })
+        pending.push({ id, revision, sizeBytes, cached })
       }
 
-      const removed = Object.keys(cache.sessions).filter((id) => next[id] === undefined).length
       const folded = await mapLimit(pending, READ_CONCURRENCY, async (item) => {
-        if (controller.signal.aborted) return { id: item.id, failed: true, aborted: true }
+        if (controller.signal.aborted) return { id: item.id, aborted: true, cached: item.cached }
         try {
           const read = await readSessionEvents(item.id)
           const header = read.header ?? { id: item.id }
           const entry = foldSession(header, read.events, read.inheritedEventCount)
-          return { id: item.id, entry: { ...entry, revision: item.revision, sizeBytes: item.sizeBytes } }
+          return {
+            id: item.id,
+            entry: { ...entry, revision: item.revision, sizeBytes: item.sizeBytes, retiredAt: null },
+          }
         } catch (error) {
           logger?.warn?.('usage-stats: session read failed', { sessionId: item.id, error: messageOf(error) })
-          return { id: item.id, failed: true }
+          return { id: item.id, failed: true, cached: item.cached }
         }
       })
 
@@ -495,23 +556,24 @@ export function apply(ctx) {
         if (result?.entry !== undefined) {
           next[result.id] = result.entry
           failedSessions.delete(result.id)
+          dirty = true
           continue
         }
-        // Aborted reads are retried next time; real failures back off.
+        // Aborted reads are retried next time; real failures back off. Either
+        // way the previous fold is kept, so one failed read cannot shrink the
+        // totals.
         if (result?.aborted !== true) failedSessions.set(result.id, Date.now())
-        skipped += 1
+        if (result?.cached !== undefined) next[result.id] = revive(result.cached)
+        else skipped += 1
       }
 
-      // Drop bookkeeping for sessions that no longer exist.
+      // Drop bookkeeping for Sessions that no longer exist.
       for (const id of [...failedSessions.keys()]) {
-        if (next[id] === undefined && !snapshots.some((snapshot) => snapshot?.header?.id === id)) {
-          failedSessions.delete(id)
-        }
+        if (!listed.has(id)) failedSessions.delete(id)
       }
 
-      const changed = pending.length > 0 || removed > 0
       cache = { version: CACHE_VERSION, generatedAt: Date.now(), sessions: next }
-      if (changed) {
+      if (dirty) {
         try {
           await persistCache()
         } catch (error) {
