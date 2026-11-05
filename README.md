@@ -4,6 +4,10 @@ DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展�
 
 > 非官方插件，与 DeepSeek 官方无隶属关系。DSH 扩展 API 可能随版本变化。当前适配 DeepSeek Harness 0.2.2-rc.1。
 
+[GitHub 仓库](https://github.com/ailawu0409/dsh-usage-stats) · [问题反馈](https://github.com/ailawu0409/dsh-usage-stats/issues)
+
+[![CI](https://github.com/ailawu0409/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/ailawu0409/dsh-usage-stats/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 ## 功能
 
 - **概览指标（3 项）**：累计 Token 数、峰值 Token 数（单日）、最长聊天时长。
@@ -39,6 +43,14 @@ DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展�
 - 如需清空全部历史（例如想从零开始），删除缓存文件后刷新即可，插件会按现存日志重新统计。
 
 ## 安装
+
+从 GitHub 安装：
+
+```sh
+dsh plugin --profile desktop add https://github.com/ailawu0409/dsh-usage-stats
+```
+
+也可以使用本地包路径或你 fork 的仓库地址：
 
 ```sh
 dsh plugin --profile desktop add <包路径或仓库地址>
@@ -85,4 +97,4 @@ npm pack --dry-run
 
 ## 许可
 
-MIT
+MIT，见 [LICENSE](LICENSE)。

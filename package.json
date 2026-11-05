@@ -4,6 +4,14 @@
   "type": "module",
   "description": "Usage statistics in Settings: token totals, activity heatmap, daily trend by model, and model share.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ailawu0409/dsh-usage-stats.git"
+  },
+  "homepage": "https://github.com/ailawu0409/dsh-usage-stats#readme",
+  "bugs": {
+    "url": "https://github.com/ailawu0409/dsh-usage-stats/issues"
+  },
   "keywords": [
     "deepseek-harness",
     "dsh-plugin",
