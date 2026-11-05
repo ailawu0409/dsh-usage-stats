@@ -188,8 +188,8 @@ window.__ModuleLoader__.load({
 .us-legendItem{display:inline-flex;align-items:center;gap:6px;min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary);white-space:nowrap}
 .us-dot{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%}
 .us-chart{position:relative;width:100%;min-width:0}
-.us-chartX{display:flex;justify-content:space-between;gap:4px;padding:6px 16px 14px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
-.us-chartXLabel{white-space:nowrap}
+.us-chartX{display:grid;padding:6px 16px 14px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
+.us-chartXLabel{justify-self:center;white-space:nowrap}
 .us-models{display:flex;align-items:center;gap:24px;min-width:0}
 .us-donut{flex:none;position:relative;width:200px;height:200px}
 .us-donutCenter{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;pointer-events:none}
@@ -435,6 +435,44 @@ window.__ModuleLoader__.load({
       return Math.min(count - 1, Math.max(0, Math.round(ratio * (count - 1))))
     }
 
+    /**
+     * Date-label indices for the axis: every day when they fit, otherwise at
+     * most `maxLabels` labels spread evenly from the first day to the last.
+     */
+    function trendLabelIndices(count, maxLabels = 8) {
+      if (!Number.isFinite(count) || count <= 0) return []
+      const total = Math.floor(count)
+      const limit = Math.max(1, Math.floor(maxLabels))
+      if (limit === 1) return [0]
+      if (total <= limit) return Array.from({ length: total }, (_, index) => index)
+      const indices = []
+      for (let step = 0; step < limit; step += 1) {
+        indices.push(Math.round((step * (total - 1)) / (limit - 1)))
+      }
+      return [...new Set(indices)]
+    }
+
+    /**
+     * Horizontal center of one day's equal-width band. Labels use the same
+     * column geometry, so the cursor, dots and the date label share one x.
+     */
+    function trendBandX(index, width, count, padLeft, padRight) {
+      const left = Number.isFinite(padLeft) ? padLeft : 0
+      const right = Number.isFinite(padRight) ? padRight : 0
+      const usable = Math.max(0, (Number.isFinite(width) ? width : 0) - left - right)
+      if (!Number.isFinite(count) || count <= 0) return left
+      return left + ((index + 0.5) / count) * usable
+    }
+
+    /** Index of the day band under one horizontal pixel offset. */
+    function nearestBandIndex(px, width, count, padLeft, padRight) {
+      const left = Number.isFinite(padLeft) ? padLeft : 0
+      const right = Number.isFinite(padRight) ? padRight : 0
+      const usable = Math.max(0, (Number.isFinite(width) ? width : 0) - left - right)
+      const band = Number.isFinite(count) && count > 0 ? usable / count : 0
+      return nearestIndex((Number.isFinite(px) ? px : 0) - left - band / 2, usable - band, count)
+    }
+
     /** Keep a centered tooltip inside its container, leaving an 8px margin. */
     function clampTipX(x, containerWidth, tipWidth) {
       const half = (Number.isFinite(tipWidth) ? tipWidth : TIP_WIDTH) / 2
@@ -677,123 +715,45 @@ window.__ModuleLoader__.load({
       return path
     }
 
-    /** Bar-chart glyph shared with the plugin icon asset. */
+    /** Bar-chart glyph shared with the plugin icon asset and the settings nav icon slot. */
     const CHART_PATHS = Object.freeze([
       'M3.5 20.5h17',
       'M7 20.5V12.5',
       'M12 20.5V5.5',
       'M17 20.5V9',
     ])
-    /** The settings panel portaled by the host shell; not a plugin-owned node. */
-    const NAV_PANEL_SELECTOR = '[data-shortcut-modal="settings"]'
+    /** Class shared with the icon-slot stylesheet rule. */
     const NAV_ICON_CLASS = 'us-navIcon'
-    /** Marked on a decorated button so repeat syncs stay cheap and idempotent. */
-    const NAV_MARK = 'usNavIcon'
-    const NAV_MARK_ATTR = 'data-us-nav-icon'
+    /** Fallback edge when the host does not hand the slot a pixel size. */
     const NAV_ICON_SIZE = 16
-    const SVG_NS = 'http://www.w3.org/2000/svg'
 
     /**
-     * The chart glyph as a real SVG node for the host settings nav.
+     * Settings navigation glyph for the host's `settings.section.icon` slot.
      *
-     * A browser-side plugin gets no icon registration hook: the settings shell
-     * hard-codes nav glyphs by section id and hands every plugin section the
-     * settings gear (dsh 0.2.1-rc.5). Mirroring `icon.svg` here keeps the entry
-     * marked with the plugin's own glyph.
+     * dsh 0.2.2 exposes the slot; the registration id must equal the section id
+     * and the shell supplies the button, label, and icon wrapper. The component
+     * only draws the glyph, mirroring `icon.svg`.
      */
-    function createSectionNavIcon(document) {
-      const svg = document.createElementNS(SVG_NS, 'svg')
-      svg.setAttribute('class', NAV_ICON_CLASS)
-      svg.setAttribute('width', String(NAV_ICON_SIZE))
-      svg.setAttribute('height', String(NAV_ICON_SIZE))
-      svg.setAttribute('viewBox', '0 0 24 24')
-      svg.setAttribute('fill', 'none')
-      svg.setAttribute('stroke', 'currentColor')
-      svg.setAttribute('stroke-width', '1.6')
-      svg.setAttribute('stroke-linecap', 'round')
-      svg.setAttribute('stroke-linejoin', 'round')
-      svg.setAttribute('aria-hidden', 'true')
-      svg.setAttribute('focusable', 'false')
-      for (const d of CHART_PATHS) {
-        const path = document.createElementNS(SVG_NS, 'path')
-        path.setAttribute('d', d)
-        svg.appendChild(path)
-      }
-      return svg
-    }
-
-    /**
-     * Replace the host's fallback gear on our settings entry with the chart.
-     *
-     * The native icon is hidden rather than removed because React still owns it;
-     * an unfamiliar host markup simply keeps showing the gear, so the patch can
-     * never break the panel.
-     */
-    function syncSectionNavIcon(root, label) {
-      if (root === null || root === undefined || typeof root.querySelectorAll !== 'function') return
-      if (typeof label !== 'string' || label.length === 0) return
-      for (const button of root.querySelectorAll('nav button')) {
-        if (button === null || typeof button.querySelector !== 'function') continue
-        // Idempotent: a decorated entry already carries this plugin's glyph.
-        if (button.querySelector('.' + NAV_ICON_CLASS) !== null) continue
-        const text = typeof button.textContent === 'string' ? button.textContent.trim() : ''
-        if (text !== label) continue
-        const nativeIcon = button.querySelector(':scope > svg:not(.' + NAV_ICON_CLASS + ')')
-        if (nativeIcon === null || nativeIcon === undefined) continue
-        const owner = button.ownerDocument
-        if (owner === null || owner === undefined || typeof owner.createElementNS !== 'function') continue
-        nativeIcon.style.display = 'none'
-        button.insertBefore(createSectionNavIcon(owner), nativeIcon)
-        if (button.dataset !== undefined) button.dataset[NAV_MARK] = 'true'
-      }
-    }
-
-    /**
-     * Keep the settings nav entry decorated while the panel is mounted.
-     *
-     * Watches the body only for the panel portal appearing or disappearing, then
-     * the panel itself for section/locale re-renders. Returns the disposer that
-     * restores the host glyph when the plugin unloads.
-     */
-    function installSettingsNavIcon(getLabel) {
-      if (typeof document === 'undefined' || document === null) return () => {}
-      if (typeof document.querySelector !== 'function' || typeof MutationObserver !== 'function') return () => {}
-      let navObserver = null
-      let navPanel = null
-      let bodyObserver = null
-      const decorate = () => {
-        const panel = document.querySelector(NAV_PANEL_SELECTOR)
-        if (navObserver !== null && panel !== navPanel) {
-          navObserver.disconnect()
-          navObserver = null
-          navPanel = null
-        }
-        if (panel === null) return
-        if (typeof getLabel === 'function') syncSectionNavIcon(panel, getLabel())
-        if (navObserver === null) {
-          navObserver = new MutationObserver(decorate)
-          navObserver.observe(panel, { childList: true, subtree: true, characterData: true })
-          navPanel = panel
-        }
-      }
-      decorate()
-      if (document.body !== null && document.body !== undefined) {
-        bodyObserver = new MutationObserver(decorate)
-        bodyObserver.observe(document.body, { childList: true })
-      }
-      return () => {
-        if (navObserver !== null) navObserver.disconnect()
-        if (bodyObserver !== null) bodyObserver.disconnect()
-        navObserver = null
-        bodyObserver = null
-        // Undo the decoration so a disabled plugin leaves the host nav intact.
-        for (const button of document.querySelectorAll(NAV_PANEL_SELECTOR + ' nav button[' + NAV_MARK_ATTR + ']')) {
-          for (const icon of button.querySelectorAll('.' + NAV_ICON_CLASS)) icon.remove()
-          const nativeIcon = button.querySelector(':scope > svg:not(.' + NAV_ICON_CLASS + ')')
-          if (nativeIcon !== null && nativeIcon !== undefined) nativeIcon.style.display = ''
-          if (button.dataset !== undefined) delete button.dataset[NAV_MARK]
-        }
-      }
+    function SectionNavIcon(props) {
+      const requested = props !== undefined && props !== null ? props.size : undefined
+      const size = Number.isFinite(requested) && requested > 0 ? Math.round(requested) : NAV_ICON_SIZE
+      return h(
+        'svg',
+        {
+          className: NAV_ICON_CLASS,
+          width: size,
+          height: size,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.6,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+          focusable: 'false',
+        },
+        CHART_PATHS.map((d) => h('path', { key: d, d })),
+      )
     }
 
     /** Refresh glyph. */
@@ -1038,16 +998,18 @@ window.__ModuleLoader__.load({
       const height = 200
       const padTop = 10
       const padBottom = 6
-      const padLeft = 4
-      const padRight = 4
+      // The plot and the label strip share the same 16px side inset, so one
+      // equal-width day band centers both the data point and its date label.
+      const padLeft = 16
+      const padRight = 16
       const plotWidth = Math.max(1, width - padLeft - padRight)
       const plotHeight = Math.max(1, height - padTop - padBottom)
       const max = trend.max > 0 ? trend.max : 1
       const count = trend.days.length
-      const xOf = (index) => padLeft + (count <= 1 ? plotWidth / 2 : (index / (count - 1)) * plotWidth)
+      const xOf = (index) => trendBandX(index, width, count, padLeft, padRight)
       const yOf = (tokens) => padTop + plotHeight * (1 - Math.min(1, Math.max(0, tokens / max)))
       const gridColor = scheme === 'dark' ? 'rgba(255,255,255,.09)' : 'rgba(17,24,39,.08)'
-      const labelStep = Math.max(1, Math.ceil(count / 8))
+      const labelIndices = React.useMemo(() => new Set(trendLabelIndices(count)), [count])
 
       /** Tooltip payload for one hovered day: total plus per-model rows. */
       const contentFor = (index) => {
@@ -1132,7 +1094,7 @@ window.__ModuleLoader__.load({
               'aria-label': t('trend.title'),
               onMouseMove: (event) => {
                 const rect = event.currentTarget.getBoundingClientRect()
-                const index = nearestIndex(event.clientX - rect.left - padLeft, plotWidth, count)
+                const index = nearestBandIndex(event.clientX - rect.left, width, count, padLeft, padRight)
                 if (index >= 0) setActiveAt(index)
               },
               onKeyDown: (event) => {
@@ -1240,11 +1202,18 @@ window.__ModuleLoader__.load({
         ),
         h(
           'div',
-          { className: 'us-chartX' },
+          {
+            className: 'us-chartX',
+            style: { gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))` },
+          },
           trend.days.map((day, index) =>
-            index % labelStep === 0 || index === trend.days.length - 1
-              ? h('span', { key: day, className: 'us-chartXLabel' }, formatDayLabel(day, chinese))
-              : h('span', { key: day, className: 'us-chartXLabel' }, ''),
+            labelIndices.has(index)
+              ? h(
+                  'span',
+                  { key: day, className: 'us-chartXLabel', style: { gridColumn: String(index + 1) } },
+                  formatDayLabel(day, chinese),
+                )
+              : null,
           ),
         ),
       )
@@ -1560,8 +1529,6 @@ window.__ModuleLoader__.load({
       ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'usage-stats: dictionaries')
       const t = ctx.locale.bind(NS)
 
-      ctx.effect(() => installSettingsNavIcon(() => t('nav')), 'usage-stats: settings nav icon')
-
       ctx.effect(
         () =>
           ctx.on('theme/change', () => {
@@ -1679,6 +1646,12 @@ window.__ModuleLoader__.load({
           UsageStatsSection,
         ),
       )
+
+      // dsh 0.2.2 renders `settings.section.icon` entries into the nav row for
+      // the matching section id; registering it here replaces the fallback gear.
+      ctx.slots.inject('settings.section.icon', () =>
+        ctx.slots.register({ name: 'settings.section.icon', id: SECTION_ID }, SectionNavIcon),
+      )
     }
 
     /** Current color scheme, tolerating a missing theme service. */
@@ -1699,9 +1672,7 @@ window.__ModuleLoader__.load({
       __test: {
         CSS,
         CHART_PATHS,
-        createSectionNavIcon,
-        syncSectionNavIcon,
-        installSettingsNavIcon,
+        SectionNavIcon,
         UsageStatsView,
         TokenActivityCard,
         TrendCard,
@@ -1716,6 +1687,9 @@ window.__ModuleLoader__.load({
         formatTokenParts,
         formatTokens,
         nearestIndex,
+        nearestBandIndex,
+        trendBandX,
+        trendLabelIndices,
         clampTipX,
         heatmapWeeks,
         HEATMAP_CELL,

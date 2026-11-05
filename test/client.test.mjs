@@ -231,6 +231,28 @@ assert.equal(helpers.nearestIndex(50, 100, 1), 0)
 assert.equal(helpers.nearestIndex(50, 0, 8), 0, 'a zero width degrades to the first point')
 assert.equal(helpers.nearestIndex(50, 100, 0), -1, 'no points yields -1')
 
+// Date labels and data points share one equal-width day band.
+assert.deepEqual(helpers.trendLabelIndices(0), [])
+assert.deepEqual(helpers.trendLabelIndices(1), [0])
+assert.deepEqual(helpers.trendLabelIndices(8), [0, 1, 2, 3, 4, 5, 6, 7])
+assert.deepEqual(helpers.trendLabelIndices(31), [0, 4, 9, 13, 17, 21, 26, 30], 'a month keeps eight evenly spaced labels')
+assert.deepEqual(helpers.trendLabelIndices(31, 4), [0, 10, 20, 30], 'the cap keeps the first and last day')
+
+assert.equal(helpers.trendBandX(0, 1000, 8, 16, 16), 76.5)
+assert.equal(helpers.trendBandX(7, 1000, 8, 16, 16), 923.5)
+assert.equal(helpers.trendBandX(0, 1000, 1, 16, 16), 500, 'a single day sits in the middle')
+assert.equal(helpers.trendBandX(0, 0, 8, 16, 16), 16, 'no measurement degrades without throwing')
+
+for (let index = 0; index < 8; index += 1) {
+  const x = helpers.trendBandX(index, 1000, 8, 16, 16)
+  assert.equal(helpers.nearestBandIndex(x, 1000, 8, 16, 16), index, `band ${index} maps back to itself`)
+}
+assert.equal(helpers.nearestBandIndex(-50, 1000, 8, 16, 16), 0, 'left overshoot clamps to the first day')
+assert.equal(helpers.nearestBandIndex(1050, 1000, 8, 16, 16), 7, 'right overshoot clamps to the last day')
+assert.equal(helpers.nearestBandIndex(500, 1000, 1, 16, 16), 0)
+assert.equal(helpers.nearestBandIndex(50, 1000, 0, 16, 16), -1, 'no days yields -1')
+assert.equal(helpers.nearestBandIndex(50, 0, 8, 16, 16), 0, 'zero width degrades to the first day')
+
 assert.equal(helpers.clampTipX(10, 800, 260), 138, 'the tooltip stays off the left edge')
 assert.equal(helpers.clampTipX(790, 800, 260), 662, 'the tooltip stays off the right edge')
 assert.equal(helpers.clampTipX(400, 800, 260), 400, 'an interior tooltip is untouched')
@@ -444,6 +466,30 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   const tooltipChild = chart.props.children.find((child) => child !== null && typeof child.type === 'function')
   assert.ok(tooltipChild !== undefined, 'the hover card is nested in the chart container')
 
+  // The axis is one equal-width grid column per day, so a label is centered
+  // over the same band as its cursor, dot and line point.
+  const chartAxis = trendCard.props.children[3]
+  assert.equal(chartAxis.props.className, 'us-chartX')
+  assert.equal(chartAxis.props.style.gridTemplateColumns, 'repeat(8, minmax(0, 1fr))')
+  const axisLabels = chartAxis.props.children.filter((child) => child !== null)
+  assert.equal(axisLabels.length, 8, 'the 8-day window labels every day')
+  assert.deepEqual(
+    axisLabels.map((label) => label.props.style.gridColumn),
+    ['1', '2', '3', '4', '5', '6', '7', '8'],
+    'each label occupies its own day column',
+  )
+
+  const longTrend = helpers.TrendCard({ stats, windowDays: 31, chinese: false, t, scheme: 'light' })
+  const longAxis = longTrend.props.children[3]
+  assert.equal(longAxis.props.style.gridTemplateColumns, 'repeat(31, minmax(0, 1fr))')
+  const longLabels = longAxis.props.children.filter((child) => child !== null)
+  assert.equal(longLabels.length, 8, 'the 30-day window caps the axis at eight labels')
+  assert.deepEqual(
+    longLabels.map((label) => label.props.style.gridColumn),
+    ['1', '5', '10', '14', '18', '22', '27', '31'],
+    'the capped labels keep the first and last day and an even spacing',
+  )
+
   const modelCard = helpers.ModelUsageCard({ stats, chinese: false, t, scheme: 'light' })
   const modelTree = JSON.stringify(modelCard, (key, value) => (typeof value === 'function' ? '[fn]' : value))
   assert.ok(modelTree.includes('us-donut'))
@@ -613,100 +659,34 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   assert.ok(css.includes('.us-title{margin:0;font-size:16px;line-height:24px;font-weight:500'), 'the title uses the host settings title scale')
   assert.equal(css.includes('.us-scope'), false, 'the scope pill is gone')
   assert.equal(css.includes('.us-header'), false, 'the title itself is the header')
-  assert.ok(css.includes('.us-navIcon{'), 'the injected nav glyph has its own rule')
+  assert.ok(css.includes('.us-navIcon{'), 'the nav glyph has its own rule')
+  assert.ok(css.includes('.us-chartX{display:grid;padding:6px 16px 14px'), 'the date axis uses equal grid columns')
+  assert.ok(css.includes('.us-chartXLabel{justify-self:center;white-space:nowrap'), 'a date label centers in its column')
 }
 
-// The settings shell hard-codes nav glyphs by section id, so the client decorates
-// its own entry: the host gear is hidden (never removed) and the chart takes its
-// slot; unmatched host markup is left untouched.
+// dsh 0.2.2 exposes an official nav-icon slot: the client registers the chart
+// glyph for its section id, and the shell keeps its own button/label chrome.
+// The glyph still mirrors the packaged icon.
 {
   const iconAsset = readFileSync(new URL('../icon.svg', import.meta.url), 'utf8')
   const assetPaths = [...iconAsset.matchAll(/<path d="([^"]+)"/g)].map((match) => match[1])
   assert.deepEqual(assetPaths, [...helpers.CHART_PATHS], 'the nav glyph mirrors icon.svg')
 
-  const created = []
-  const owner = {
-    createElementNS(namespace, tag) {
-      const node = {
-        tag,
-        attrs: {},
-        children: [],
-        style: {},
-        setAttribute(name, value) {
-          this.attrs[name] = String(value)
-        },
-        appendChild(child) {
-          this.children.push(child)
-          return child
-        },
-      }
-      created.push(node)
-      return node
-    },
-  }
-  const nativeIcon = { style: {} }
-  const button = {
-    dataset: {},
-    ownerDocument: owner,
-    textContent: ' 使用统计 ',
-    inserted: [],
-    querySelector(selector) {
-      if (selector === '.us-navIcon') return this.inserted.length > 0 ? this.inserted[0].node : null
-      if (selector === ':scope > svg:not(.us-navIcon)') return nativeIcon
-      return null
-    },
-    insertBefore(node, reference) {
-      this.inserted.push({ node, reference })
-    },
-  }
-  const root = { querySelectorAll: (selector) => (selector === 'nav button' ? [button] : []) }
-  helpers.syncSectionNavIcon(root, '使用统计')
-  assert.equal(nativeIcon.style.display, 'none', 'the host gear is hidden, not removed')
-  assert.equal(button.inserted.length, 1)
-  assert.equal(button.inserted[0].reference, nativeIcon, 'the chart takes the gear slot')
-  const icon = button.inserted[0].node
-  assert.equal(icon.attrs.class, 'us-navIcon')
-  assert.equal(icon.attrs.width, '16')
-  assert.equal(icon.attrs.height, '16')
-  assert.equal(icon.attrs.viewBox, '0 0 24 24')
-  assert.equal(icon.attrs['aria-hidden'], 'true')
-  assert.equal(icon.children.length, helpers.CHART_PATHS.length)
-  assert.deepEqual(icon.children.map((path) => path.attrs.d), [...helpers.CHART_PATHS])
-  assert.equal(button.dataset.usNavIcon, 'true')
+  const icon = helpers.SectionNavIcon({ size: 16, active: true })
+  assert.equal(icon.type, 'svg')
+  assert.equal(icon.props.className, 'us-navIcon')
+  assert.equal(icon.props.width, 16)
+  assert.equal(icon.props.height, 16)
+  assert.equal(icon.props.viewBox, '0 0 24 24')
+  assert.equal(icon.props['aria-hidden'], 'true')
+  assert.equal(icon.props.children.length, helpers.CHART_PATHS.length)
+  assert.deepEqual(icon.props.children.map((path) => path.props.d), [...helpers.CHART_PATHS])
 
-  helpers.syncSectionNavIcon(root, '使用统计')
-  assert.equal(button.inserted.length, 1, 'repeat syncs are idempotent')
-
-  let skipped = 0
-  const otherButton = {
-    dataset: {},
-    ownerDocument: owner,
-    textContent: '通用设置',
-    querySelector(selector) {
-      return selector === ':scope > svg:not(.us-navIcon)' ? nativeIcon : null
-    },
-    insertBefore() {
-      skipped += 1
-    },
-  }
-  helpers.syncSectionNavIcon({ querySelectorAll: () => [otherButton] }, '使用统计')
-  assert.equal(skipped, 0, 'other sections keep their own glyph')
-
-  const noGlyphButton = {
-    dataset: {},
-    ownerDocument: owner,
-    textContent: '使用统计',
-    querySelector: () => null,
-    insertBefore() {
-      skipped += 1
-    },
-  }
-  helpers.syncSectionNavIcon({ querySelectorAll: () => [noGlyphButton] }, '使用统计')
-  assert.equal(skipped, 0, 'unfamiliar host markup leaves the nav untouched')
-
-  const dispose = helpers.installSettingsNavIcon(() => 'usage-stats:nav')
-  assert.equal(typeof dispose, 'function')
-  dispose()
+  // The host hands the slot 16px; a missing or unusable size must not collapse.
+  assert.equal(helpers.SectionNavIcon({}).props.width, 16)
+  assert.equal(helpers.SectionNavIcon({ size: Number.NaN }).props.width, 16)
+  assert.equal(helpers.SectionNavIcon({ size: 0 }).props.width, 16)
+  assert.equal(helpers.SectionNavIcon({ size: 24 }).props.width, 24)
 }
 
 // The model row hover highlight is an inset rounded card, not a full-bleed
@@ -873,9 +853,10 @@ assert.equal(descriptor.parameters[0].codec.mode, 'strict')
 
 assert.deepEqual(requests, [{ action: 'getStats' }], 'the page loads once after mounting')
 
-assert.deepEqual(slotInjections, ['settings.section'])
-assert.equal(registrations.length, 1)
-const section = registrations[0].options
+assert.deepEqual(slotInjections, ['settings.section', 'settings.section.icon'])
+assert.equal(registrations.length, 2)
+const sectionRegistration = registrations.find((entry) => entry.options.name === 'settings.section')
+const section = sectionRegistration.options
 assert.equal(section.name, 'settings.section')
 assert.equal(section.id, 'usage-stats')
 assert.equal(section.order, 101)
@@ -893,7 +874,12 @@ assert.equal(injected.hooks.stats.getSnapshot().stats.totals.tokens, 100)
 assert.equal(injected.hooks.colorScheme.getSnapshot().scheme, 'dark')
 assert.equal(typeof injected.hooks.locale.getSnapshot, 'function')
 assert.equal(injected.hooks.locale.getSnapshot().id, 'zh')
-assert.equal(typeof registrations[0].component, 'function')
+assert.equal(typeof sectionRegistration.component, 'function')
+
+const iconRegistration = registrations.find((entry) => entry.options.name === 'settings.section.icon')
+assert.ok(iconRegistration !== undefined, 'the settings nav icon uses the official slot')
+assert.equal(iconRegistration.options.id, 'usage-stats', 'the icon id matches its section id')
+assert.equal(iconRegistration.component, helpers.SectionNavIcon)
 
 await injected.actions.refresh()
 assert.deepEqual(requests, [{ action: 'getStats' }, { action: 'refresh' }])
