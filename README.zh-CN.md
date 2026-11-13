@@ -4,9 +4,9 @@
 
 DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展示本机会话的 Token 用量、活跃情况、聊天时长与模型分布。
 
-> 非官方插件，与 DeepSeek 官方无隶属关系。DSH 扩展 API 可能随版本变化。已在 DeepSeek Harness 0.2.2-rc.2 上验证；建议使用 0.2.2-rc.1 或更新版本。
+> 非官方插件，与 DeepSeek 官方无隶属关系。DSH 扩展 API 可能随版本变化。已在 DeepSeek Harness 0.2.2-rc.3 上验证；建议使用 0.2.2-rc.1 或更新版本。
 >
-> **版本说明**：`package.json` 中的版本号（当前 `0.2.2`）是插件版本，不是宿主版本；清单未声明宿主版本约束，上述兼容性说明仅供参考。
+> **版本说明**：`package.json` 中的版本号（当前 `0.2.3`）是插件版本，不是宿主版本；清单未声明宿主版本约束，上述兼容性说明仅供参考。
 
 [GitHub 仓库](https://github.com/ailawu0409/dsh-usage-stats) · [发布记录](https://github.com/ailawu0409/dsh-usage-stats/releases) · [问题反馈](https://github.com/ailawu0409/dsh-usage-stats/issues)
 
@@ -75,7 +75,7 @@ dsh plugin --profile desktop add /path/to/dsh-usage-stats
 
 重启 DeepSeek Harness 后打开 **设置 → 使用统计**（位于「归档管理」下方）。
 
-已在 DeepSeek Harness 0.2.2-rc.2 上验证。建议使用 DeepSeek Harness 0.2.2-rc.1 或更新版本以显示自定义导航图标；更旧的宿主会显示默认设置齿轮，但不会报错。
+已在 DeepSeek Harness 0.2.2-rc.3 上验证。建议使用 DeepSeek Harness 0.2.2-rc.1 或更新版本以显示自定义导航图标；更旧的宿主会显示默认设置齿轮，但不会报错。
 
 ## 开发
 

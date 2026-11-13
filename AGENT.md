@@ -13,7 +13,7 @@ dsh-usage-stats 是一个非官方的 DeepSeek Harness 设置面板插件，在�
 - 使用 JavaScript ES Modules，Node.js 版本要求为 >= 22（CI 覆盖 Node 22 / 24）。
 - 不引入第三方运行时依赖，除非用户明确要求。
 - Host 与 Client 分端实现，避免在 Client 中直接访问文件系统或会话日志。
-- DeepSeek Harness 扩展 API 可能随宿主版本变化，修改集成逻辑时应保持现有兼容方式；当前适配 0.2.2-rc.2（0.2.2-rc.1 → rc.2 没有影响本插件所用接口的变化），`package.json` 未声明宿主版本约束。
+- DeepSeek Harness 扩展 API 可能随宿主版本变化，修改集成逻辑时应保持现有兼容方式；当前适配 0.2.2-rc.3（0.2.2-rc.2 → rc.3 没有影响本插件所用接口的变化），`package.json` 未声明宿主版本约束。
 - 图表和界面使用项目现有实现（React + 手写 CSS/SVG），不为了局部改动引入新的框架或构建流程。
 - 插件版本号在 `package.json`，与宿主版本号无关；文档中不要把两者混为一谈。
 

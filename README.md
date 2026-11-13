@@ -6,9 +6,9 @@
 
 A community plugin for DeepSeek Harness that adds a **Usage Statistics** section to Settings: token totals, activity, chat duration, and model share for local sessions.
 
-> **Unofficial plugin:** Not affiliated with or endorsed by DeepSeek. DSH extension APIs may change between releases. Verified against DeepSeek Harness 0.2.2-rc.2; 0.2.2-rc.1 or newer is recommended.
+> **Unofficial plugin:** Not affiliated with or endorsed by DeepSeek. DSH extension APIs may change between releases. Verified against DeepSeek Harness 0.2.2-rc.3; 0.2.2-rc.1 or newer is recommended.
 >
-> **Version note:** the version in `package.json` (currently `0.2.2`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes above are advisory.
+> **Version note:** the version in `package.json` (currently `0.2.3`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes above are advisory.
 
 ## Features
 
@@ -73,7 +73,7 @@ dsh plugin --profile desktop add /path/to/dsh-usage-stats
 
 Restart DeepSeek Harness and open **Settings → Usage Statistics** (below Archived sessions).
 
-Verified against DeepSeek Harness 0.2.2-rc.2. DeepSeek Harness 0.2.2-rc.1 or newer is recommended for the custom navigation icon; older hosts fall back to the default gear without error.
+Verified against DeepSeek Harness 0.2.2-rc.3. DeepSeek Harness 0.2.2-rc.1 or newer is recommended for the custom navigation icon; older hosts fall back to the default gear without error.
 
 ## Development
 
