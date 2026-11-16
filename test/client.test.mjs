@@ -99,6 +99,64 @@ assert.equal(helpers.shiftDayKey('2026-11-01', -1), '2026-10-31')
 assert.equal(helpers.shiftDayKey('2026-12-31', 1), '2027-01-01')
 assert.equal(helpers.dayKeyOf(new Date(2026, 10, 3)), '2026-11-03')
 
+// --- per-session card -------------------------------------------------------
+
+assert.deepEqual(helpers.sessionRowsOf({}), [], 'a missing bySession renders no rows')
+assert.deepEqual(helpers.sessionRowsOf({ bySession: { rows: 'nope' } }), [])
+assert.equal(helpers.sessionRowsOf({ bySession: { rows: [{ id: 'a', tokens: 1 }] } }).length, 1)
+
+const sessionT = (key, parameters) =>
+  parameters === undefined ? key : `${key}(${Object.values(parameters).join(',')})`
+assert.equal(helpers.sessionNameOf({ id: 'abcdef1234567890', title: 'Plan review' }, sessionT), 'Plan review')
+assert.equal(helpers.sessionNameOf({ id: 'abcdef1234567890', title: '   ' }, sessionT), 'bySession.untitled · abcdef12')
+assert.equal(helpers.sessionNameOf({ id: 'abcdef1234567890' }, sessionT), 'bySession.untitled · abcdef12')
+assert.equal(helpers.sessionNameOf({ id: 'abc' }, sessionT), 'bySession.untitled · abc')
+assert.equal(helpers.sessionNameOf({}, sessionT), 'bySession.untitled')
+assert.equal(helpers.shortSessionId('abcdef1234567890'), 'abcdef12')
+assert.equal(helpers.shortSessionId(undefined), '')
+assert.equal(helpers.sessionShareOf(50, 200), 25)
+assert.equal(helpers.sessionShareOf(300, 200), 100)
+assert.equal(helpers.sessionShareOf(0, 200), 0)
+assert.equal(helpers.sessionShareOf(10, 0), 0)
+
+{
+  const stats = {
+    today: '2026-11-03',
+    totals: { tokens: 60, peakDay: '2026-11-03', peakTokens: 40, longestChatMs: 0 },
+    daily: [],
+    models: [],
+    sessions: { total: 2, counted: 2, skipped: 0, retired: 0, truncated: false },
+    bySession: {
+      rows: [
+        { id: 'aaa11111', title: 'Alpha', tokens: 40, lastDay: '2026-11-03' },
+        { id: 'bbb22222', title: null, tokens: 20, lastDay: '2026-11-02' },
+      ],
+      total: 2,
+      truncated: false,
+    },
+  }
+  const card = helpers.SessionUsageCard({ stats, chinese: true, t: sessionT })
+  const tree = JSON.stringify(card, (key, value) => (typeof value === 'function' ? '[fn]' : value))
+  assert.equal(card.type, 'section')
+  assert.ok(tree.includes('bySession.title'), 'the card carries its own title')
+  assert.ok(tree.includes('bySession.note'), 'the scope note explains the archive filter')
+  assert.ok(tree.includes('Alpha'))
+  assert.ok(tree.includes('bySession.untitled · bbb22222'), 'an untitled Session falls back to its id')
+  assert.ok(tree.includes('11月3日'), 'the last active day is formatted for the locale')
+  assert.ok(tree.includes('bySession.total(2)'), 'the card reports the unarchived total')
+  assert.equal(tree.includes('bySession.truncated'), false, 'no truncation note below the cap')
+  assert.ok(tree.includes('%'), 'rows carry a usage bar')
+
+  const emptyStats = {
+    ...stats,
+    bySession: { rows: [], total: 0, truncated: false },
+  }
+  const emptyTree = JSON.stringify(helpers.SessionUsageCard({ stats: emptyStats, chinese: true, t: sessionT }), (key, value) =>
+    typeof value === 'function' ? '[fn]' : value,
+  )
+  assert.ok(emptyTree.includes('bySession.empty'), 'an all-archived history shows the empty note')
+}
+
 // --- heatmap ---------------------------------------------------------------
 
 {
@@ -662,6 +720,11 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   assert.ok(css.includes('.us-navIcon{'), 'the nav glyph has its own rule')
   assert.ok(css.includes('.us-chartX{display:grid;padding:6px 16px 14px'), 'the date axis uses equal grid columns')
   assert.ok(css.includes('.us-chartXLabel{justify-self:center;white-space:nowrap'), 'a date label centers in its column')
+  // The per-session list scrolls inside its card and keeps the row separator
+  // as an inset border off the first row.
+  assert.ok(css.includes('.us-sessionList{display:flex;flex-direction:column;max-height:360px;margin:4px -16px 0;padding:0 16px;overflow-y:auto'))
+  assert.ok(css.includes('.us-sessionRow:first-child{padding-top:4px;border-top:none}'))
+  assert.ok(css.includes('.us-sessionBarFill{display:block;height:100%;min-width:2px'), 'the usage bar keeps a visible minimum')
 }
 
 // dsh 0.2.2 exposes an official nav-icon slot: the client registers the chart
@@ -760,6 +823,11 @@ const FAKE_STATS = {
   },
   daily: [{ day: '2026-11-03', tokens: 100, models: { 'group/m1': 100 } }],
   models: [{ model: 'group/m1', tokens: 100 }],
+  bySession: {
+    rows: [{ id: 'session-1', title: 'Alpha', tokens: 100, lastDay: '2026-11-03' }],
+    total: 1,
+    truncated: false,
+  },
 }
 
 const locale = {
@@ -900,6 +968,11 @@ assert.deepEqual(requests, [{ action: 'getStats' }, { action: 'refresh' }])
   assert.equal(view.type, 'div')
   assert.equal(view.props.className, 'us-root')
   assert.equal(view.props['data-scheme'], 'dark')
+  const children = Array.isArray(view.props.children) ? view.props.children : []
+  assert.ok(
+    children.some((child) => child !== null && child !== undefined && child.type === helpers.SessionUsageCard),
+    'the per-session card is part of the page',
+  )
 }
 
 // A missing hook degrades to the error card instead of crashing.

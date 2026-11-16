@@ -3,7 +3,10 @@
  *
  * Reads the profile's stored Session logs (read-only), folds every
  * `assistant/message` token usage into per-day/per-model buckets, and publishes
- * one small owner-only Remote that the Settings page calls.
+ * one small owner-only Remote that the Settings page calls. The same snapshot
+ * carries a per-Session usage list limited to unarchived Sessions: the archive
+ * set comes from the Workspace registry and the titles from the Session list's
+ * projection hints, so neither the list nor its labels adds a log read.
  *
  * Node builtins are the only imports: a profile-installed bundle is linked from
  * this checkout and cannot resolve dsh's own packages. Session data therefore
@@ -38,6 +41,8 @@ const WARMUP_DELAY_MS = 5_000
 const DAILY_WINDOW_DAYS = 400
 /** Hard stop for absurd corpora; the fold stays bounded. */
 const MAX_SESSIONS = 20_000
+/** Sessions sent to the per-Session breakdown; the rest only contribute totals. */
+const SESSION_LIST_LIMIT = 200
 const UNKNOWN_MODEL = 'unknown'
 
 /** Whether a value is a plain JSON object. */
@@ -210,26 +215,38 @@ function normalizeCache(raw) {
 
 /**
  * Aggregate folded entries into the wire snapshot.
+ *
+ * The per-Session list exists only when the archive set is known: without it
+ * the response must not claim that every listed Session is unarchived.
+ *
  * @param {Record<string, object>} sessions cached entries keyed by Session id
- * @param {{today: string, skipped: number, total: number, truncated?: boolean}} meta
+ * @param {{today: string, skipped: number, total: number, truncated?: boolean, archived?: Set<string>, subagents?: Set<string>, titles?: Map<string, string|null>}} meta
  */
 function aggregateStats(sessions, meta) {
   const daily = new Map()
   const models = new Map()
   const turns = new Map()
+  const archived = meta.archived instanceof Set ? meta.archived : null
+  const subagents = meta.subagents instanceof Set ? meta.subagents : new Set()
+  const titles = meta.titles instanceof Map ? meta.titles : new Map()
+  /** Rows of the per-Session breakdown, before the wire cap. */
+  const perSession = []
   let tokens = 0
   let longestChatMs = 0
   let counted = 0
   let retired = 0
 
-  for (const entry of Object.values(sessions)) {
+  for (const [id, entry] of Object.entries(sessions)) {
     counted += 1
-    if (entry.retiredAt !== null && entry.retiredAt !== undefined) retired += 1
+    const gone = entry.retiredAt !== null && entry.retiredAt !== undefined
+    if (gone) retired += 1
     if (entry.activeMs > longestChatMs) longestChatMs = entry.activeMs
     for (const [key, count] of Object.entries(entry.dayTurns ?? {})) {
       if (!Number.isFinite(count) || count <= 0) continue
       turns.set(key, (turns.get(key) ?? 0) + count)
     }
+    let sessionTokens = 0
+    let lastDay = null
     for (const [key, bucket] of Object.entries(entry.day)) {
       let dayBucket = daily.get(key)
       if (dayBucket === undefined) {
@@ -240,9 +257,31 @@ function aggregateStats(sessions, meta) {
         dayBucket.set(model, (dayBucket.get(model) ?? 0) + count)
         models.set(model, (models.get(model) ?? 0) + count)
         tokens += count
+        sessionTokens += count
       }
+      if (lastDay === null || key > lastDay) lastDay = key
     }
+    // Removed Sessions keep counting in the totals, but they are not rows; the
+    // same goes for archived Sessions, subagent children (hidden from the
+    // Session list by the host) and Sessions that spent no tokens.
+    if (archived === null || gone || archived.has(id) || subagents.has(id) || sessionTokens <= 0) continue
+    const title = titles.get(id)
+    perSession.push({
+      id,
+      title: typeof title === 'string' && title.trim().length > 0 ? title.trim() : null,
+      tokens: sessionTokens,
+      lastDay,
+    })
   }
+
+  perSession.sort((left, right) => right.tokens - left.tokens || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+  const bySession = archived === null
+    ? undefined
+    : {
+        rows: perSession.slice(0, SESSION_LIST_LIMIT),
+        total: perSession.length,
+        truncated: perSession.length > SESSION_LIST_LIMIT,
+      }
 
   const dayKeys = [...daily.keys()].sort()
   const today = meta.today
@@ -285,6 +324,7 @@ function aggregateStats(sessions, meta) {
       retired,
       truncated: meta.truncated === true,
     },
+    ...(bySession === undefined ? {} : { bySession }),
     totals: {
       tokens,
       peakDay,
@@ -393,6 +433,64 @@ export function apply(ctx) {
     const temporary = `${cacheFile}.tmp-${process.pid}-${Date.now()}`
     await writeFile(temporary, `${JSON.stringify(cache)}\n`, 'utf8')
     await rename(temporary, cacheFile)
+  }
+
+  /** Whether a missing archive set or Session titles were already reported. */
+  let archiveWarning = false
+  let titleWarning = false
+
+  /**
+   * The registry-global archive set.
+   *
+   * Returns null when the Workspace registry is missing or not initialized:
+   * the per-Session list is then omitted instead of shown with the wrong
+   * membership. The failure is logged once, not on every scan.
+   */
+  function readArchivedSessionIds() {
+    try {
+      const registry = ctx.get('workspaceRegistry')
+      const ids = registry?.archivedSessionIds
+      if (!Array.isArray(ids)) throw new Error('the Workspace registry does not expose archivedSessionIds')
+      return new Set(ids.map((id) => String(id)))
+    } catch (error) {
+      if (!archiveWarning) {
+        archiveWarning = true
+        logger?.warn?.('usage-stats: archived Sessions are unavailable', messageOf(error))
+      }
+      return null
+    }
+  }
+
+  /**
+   * Titles of the Sessions the host lists, keyed by Session id.
+   *
+   * The titles are the Session list's projection hints (the same values the
+   * sidebar shows); cold Sessions are served from the persisted projection
+   * cache, so this adds no log reads. Any failure only costs the labels.
+   * @param {AbortSignal} signal cancellation for the listing
+   */
+  async function readSessionTitles(signal) {
+    const sessionController = ctx.get('sessionController')
+    if (sessionController === undefined || typeof sessionController.list !== 'function') return new Map()
+    try {
+      const value = await sessionController.list({}, signal)
+      const items = Array.isArray(value?.items) ? value.items : []
+      const titles = new Map()
+      for (const item of items) {
+        const id = typeof item?.sessionId === 'string' ? item.sessionId : ''
+        if (id.length === 0) continue
+        const title = item?.projections?.values?.title
+        if (typeof title === 'string' && title.trim().length > 0) titles.set(id, title)
+        else if (title === null) titles.set(id, null)
+      }
+      return titles
+    } catch (error) {
+      if (!titleWarning) {
+        titleWarning = true
+        logger?.warn?.('usage-stats: Session titles are unavailable', messageOf(error))
+      }
+      return new Map()
+    }
   }
 
   /** The live persistence listing, or undefined when the service is missing. */
@@ -582,7 +680,25 @@ export function apply(ctx) {
       }
 
       const today = localDayKey(Date.now())
-      return { stats: aggregateStats(next, { today, skipped, total, truncated }) }
+      // The per-Session breakdown needs the registry's archive set: without it
+      // the list cannot honor "unarchived only", so it is left out instead.
+      const archived = readArchivedSessionIds()
+      const subagents = new Set()
+      for (const [id, snapshot] of listed) {
+        if (snapshot?.header?.origin === 'subagent') subagents.add(id)
+      }
+      const titles = archived === null || total === 0 ? new Map() : await readSessionTitles(controller.signal)
+      return {
+        stats: aggregateStats(next, {
+          today,
+          skipped,
+          total,
+          truncated,
+          ...(archived === null ? {} : { archived }),
+          subagents,
+          titles,
+        }),
+      }
     } catch (error) {
       logger?.warn?.('usage-stats: scan failed', error)
       return { error: { code: 'scan-failed', message: messageOf(error) } }
@@ -646,7 +762,7 @@ export function apply(ctx) {
             namespace: SERVICE,
             method: 'command',
             description:
-              'Usage statistics over stored Session logs: token totals, activity per day, chat duration, and model share.',
+              'Usage statistics over stored Session logs: token totals, activity per day, chat duration, model share, and unarchived per-Session usage.',
             invocation: { kind: 'direct' },
             parameters: [
               {
@@ -693,4 +809,4 @@ export function apply(ctx) {
   })
 }
 
-export { CACHE_VERSION, DAY_MS, foldSession, localDayKey, normalizeCache, usageTokens, aggregateStats }
+export { CACHE_VERSION, DAY_MS, SESSION_LIST_LIMIT, foldSession, localDayKey, normalizeCache, usageTokens, aggregateStats }

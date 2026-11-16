@@ -4,11 +4,11 @@
 
 [![CI](https://github.com/ailawu0409/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/ailawu0409/dsh-usage-stats/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A community plugin for DeepSeek Harness that adds a **Usage Statistics** section to Settings: token totals, activity, chat duration, and model share for local sessions.
+A community plugin for DeepSeek Harness that adds a **Usage Statistics** section to Settings: token totals, per-session usage, activity, chat duration, and model share for local sessions.
 
 > **Unofficial plugin:** Not affiliated with or endorsed by DeepSeek. DSH extension APIs may change between releases. Verified against DeepSeek Harness 0.2.2-rc.3; 0.2.2-rc.1 or newer is recommended.
 >
-> **Version note:** the version in `package.json` (currently `0.2.3`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes above are advisory.
+> **Version note:** the version in `package.json` (currently `0.3.0`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes above are advisory.
 
 ## Features
 
@@ -17,6 +17,7 @@ A community plugin for DeepSeek Harness that adds a **Usage Statistics** section
   - Cells stay at the reference 11px; the number of weeks adapts to the panel width (up to 53, at least 13). The summary states the actual range, for example "over the last 8 months".
 - **Daily token trend**: smoothed lines colored by model, with Last 7 days / Last 30 days ranges (8 / 31 points including today, with at most 8 date labels on the axis). Hover shows a vertical cursor, highlighted points, and a per-model breakdown for that day. Only the six models with the most tokens in the selected range are plotted, and the hover breakdown lists those series; the remaining models are not drawn individually (they are aggregated into "Other models" in the donut chart).
 - **Model usage**: donut chart plus a share list (top 5 models + Other); hovering a segment shows its tokens and share.
+- **Usage by session**: Sessions ranked by token usage, busiest first (up to 200 rows, scrolled inside the card). Each row shows the Session title, its last active day, and a usage bar. **Only unarchived Sessions appear**: archived, deleted, and subagent Sessions are left out of the list, while their usage still contributes to the totals, peak, heatmap, and model share under the history-retention rule below. A Session without a title is shown as "Untitled session · short id".
 - Follows the host light/dark theme and official font, ships a bilingual Chinese/English UI, and provides a sticky Refresh button in the bottom-right corner. Refresh triggers a full re-scan of every listed session, not just a view update.
 - The page header keeps only the title (host settings title scale, 16px); the settings navigation icon uses the plugin's own bar-chart glyph through the `settings.section.icon` slot introduced in DSH 0.2.2 (section id `usage-stats`, order 101, right after Archived sessions).
 - Errors are presented in three states: a first load without data shows a full-page error with a retry button; a failed refresh keeps the existing data and shows one retryable banner at the top; a rendering crash is contained by an error boundary with its own retry.
@@ -34,6 +35,8 @@ All data comes from **local session logs** (read-only; no network access and not
 - Heatmap summary: counts only the range the grid actually draws, never history outside the window.
 - Deduplication: forked sessions skip the inherited prefix (`seq < inheritedEventCount`), so they are not counted twice with their parent.
 - History retention: after a session is archived, moved out of storage, or permanently deleted, its folded usage still contributes to totals, peak, heatmap, and model share. The footer notes "Includes history from N session(s) no longer listed". This follows the same usage-ledger idea as ZCode: statistics do not depend on the session list.
+- Session list: only Sessions that are still listed in persistence, are not in the host Workspace registry's archive set (`archivedSessionIds`), are not subagent children (`header.origin === 'subagent'`), and have a token total above zero become rows. Deleted (`retiredAt`), archived, and subagent Sessions are excluded from the list while still counting in the totals under the rule above. Rows are ordered by token usage, capped at 200 and scrolled inside the card; the footer notes "showing the top 200 by usage" when the cap is hit.
+- Session titles: taken from the host session list's projection hints (the same titles the sidebar shows); cold Sessions come from the host's projection cache, so no extra log reads happen. A missing title (or a host without the session-list service) falls back to "Untitled session · short id", and the last active day is the Session's last day with usage.
 - Failure retention: a failed read or a `migration-required` session never makes accumulated values shrink; the previous result is retained. Only sessions that have never been counted are reported as skipped. Failed sessions cool down for 5 minutes and are not re-read on every scan.
 - Session count: the footer's "Across N sessions" includes retained history, so it can exceed the number of sessions currently stored.
 - Cap: one scan reads and folds at most 20,000 **currently listed** sessions. When the listing is larger, the page shows a truncation note. Retained history and already-cached entries are still counted, so the displayed session count can exceed 20,000.
@@ -48,6 +51,8 @@ All data comes from **local session logs** (read-only; no network access and not
 - Scans are bounded: at most 4 concurrent session reads, a 120-second abort deadline, and concurrent callers share one in-flight scan. The Client gives up on a Remote call after 60 seconds.
 - The plugin warms the cache once, 5 seconds after activation, so opening the page is usually a cache hit.
 - Cache migrations run automatically: a v2 cache is upgraded in place to v3 without a full re-read; only older (v1) or unknown versions are discarded and rebuilt. A corrupt file is discarded too.
+- The per-session list keeps no title cache of its own: titles are read from the host's Session projections on every scan (no extra log reads), and the archive set is read from the Workspace registry each time. The fold cache layout and version therefore stay unchanged (still v3). Archiving, unarchiving, or deleting a Session shows up after the next scan — reopening the page or pressing Refresh.
+- When the host lacks the Workspace registry (so archive state is unknown), the response omits the per-session list and the card is not rendered; a missing session-list service or a failed title read only costs the labels, never the statistics.
 - To clear all history: **quit DeepSeek Harness completely, delete the cache file, then restart the app**. Deleting the file while the host is running does not clear the in-memory cache; the next scan — and especially a Refresh — writes the retained history back. After a restart the plugin rebuilds from the session logs that still exist.
 - Host failures are returned as `{ error: { code, message } }` with `stats-unavailable`, `scan-failed`, or `bad-request`.
 
@@ -91,8 +96,8 @@ There are no third-party runtime dependencies. Tests use temporary directories a
 
 | File | Purpose |
 | --- | --- |
-| `index.js` | Host half: scans session logs, folds statistics, durable cache, hand-written Remote |
-| `client.js` | Client half: settings page, heatmap/trend/donut charts, hover cards, i18n, navigation icon slot |
+| `index.js` | Host half: scans session logs, folds statistics, unarchived per-session list, durable cache, hand-written Remote |
+| `client.js` | Client half: settings page, heatmap/trend/donut charts, per-session usage list, hover cards, i18n, navigation icon slot |
 | `cordis.patch.yml` | Plugin row registration |
 | `locale/*.json` | Plugin manifest title and description |
 | `icon.svg` | Plugin icon |
@@ -113,6 +118,7 @@ There are no third-party runtime dependencies. Tests use temporary directories a
 - The "Last 7 days" trend plots 8 points and "Last 30 days" plots 31 points (today plus the preceding days), matching the reference design; the date axis shows at most 8 labels.
 - The trend plots at most six model series, ranked by tokens in the selected range; other models appear only as part of "Other models" in the donut chart.
 - The 20,000 cap applies to currently listed sessions per scan, not to retained history, so the footer's session count can be higher.
+- The "Usage by session" list shows at most 200 rows and reflects the archive state of the last scan: after archiving, unarchiving, or deleting a Session in the host's archive UI, reopen this page or press Refresh to update the list. The list depends on the host Workspace registry; when that service is unavailable the card is hidden and the other statistics are unaffected.
 - On a narrow settings panel the heatmap reduces the number of weeks instead of shrinking cells, so a full year is not visible on narrow panels.
 - The settings navigation icon is registered through the `settings.section.icon` slot introduced in DSH 0.2.2 (the registration id equals the section id). Hosts older than 0.2.2 do not have that seat and show the default gear without error.
 - DSH 0.2.2 adds German, Spanish, French, Japanese, Portuguese, and Russian UI; this plugin's copy remains Chinese/English and falls back to English for other languages.

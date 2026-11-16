@@ -9,6 +9,7 @@ import {
   foldSession,
   localDayKey,
   normalizeCache,
+  SESSION_LIST_LIMIT,
   usageTokens,
 } from '../index.js'
 
@@ -39,16 +40,17 @@ function turnEnd(seq, time, turn) {
 /** One stored Session: snapshot + the events its read returns. */
 function storedSession(id, createdAt, events, extra = {}) {
   const inheritedEventCount = extra.inheritedEventCount ?? 0
+  const lineage = extra.origin === undefined ? {} : { origin: extra.origin }
   return {
     snapshot: {
-      header: { id, version: 4, createdAt, isSeeded: false },
+      header: { id, version: 4, createdAt, isSeeded: false, ...lineage },
       revision: extra.revision ?? `rev-${id}`,
       sizeBytes: extra.sizeBytes ?? 1000,
       eventCount: events.length,
       formatStatus: extra.formatStatus,
     },
     read: {
-      session: { id, version: 4, createdAt, isSeeded: false },
+      session: { id, version: 4, createdAt, isSeeded: false, ...lineage },
       inheritedEventCount,
       events,
     },
@@ -105,6 +107,34 @@ function boot(sessions, options = {}) {
               if (entry === undefined) throw new Error(`missing ${id}`)
               if (entry.fail) throw new Error(`unreadable ${id}`)
               return entry.read
+            },
+          }
+        case 'workspaceRegistry':
+          if (options.registryFails === true) throw new Error('registry unavailable')
+          if (options.noRegistry === true) return undefined
+          return {
+            get archivedSessionIds() {
+              return options.archived ?? []
+            },
+          }
+        case 'sessionController':
+          if (options.noSessionController === true) return undefined
+          return {
+            async list() {
+              if (options.titlesFail === true) throw new Error('titles failed')
+              return {
+                items: snapshots.map((snapshot) => {
+                  const id = snapshot.header.id
+                  return {
+                    sessionId: id,
+                    projections: {
+                      kind: 'cached',
+                      asOfSeq: 0,
+                      values: { title: options.titles?.[id] ?? null },
+                    },
+                  }
+                }),
+              }
             },
           }
         default:
@@ -303,6 +333,64 @@ assert.equal(localDayKey(first), '2026-11-01')
   assert.equal(aggregate.totals.longestChatMs, 9000, 'a removed Session keeps the longest chat')
   assert.deepEqual(aggregate.models, [{ model: 'm1', tokens: 50 }])
   assert.deepEqual(aggregate.sessions, { total: 1, counted: 2, skipped: 0, retired: 1, truncated: false })
+}
+
+{
+  // The per-Session list is unarchived-only: archived and removed Sessions keep
+  // counting in the totals but never appear as rows. Rows carry trimmed titles.
+  const aggregate = aggregateStats(
+    {
+      alpha: { activeMs: 5000, day: { '2026-11-01': { m1: 10 }, '2026-11-02': { m1: 5 } }, dayTurns: {} },
+      beta: { activeMs: 1000, day: { '2026-11-01': { m1: 40 } }, dayTurns: {} },
+      gone: { activeMs: 0, day: { '2026-11-03': { m1: 99 } }, dayTurns: {}, retiredAt: 5 },
+      archived: { activeMs: 0, day: { '2026-11-01': { m1: 500 } }, dayTurns: {} },
+      child: { activeMs: 0, day: { '2026-11-01': { m1: 77 } }, dayTurns: {} },
+      blank: { activeMs: 2000, day: {}, dayTurns: {} },
+    },
+    {
+      today: '2026-11-03',
+      skipped: 0,
+      total: 6,
+      archived: new Set(['archived']),
+      subagents: new Set(['child']),
+      titles: new Map([
+        ['beta', ' Bravo '],
+        ['alpha', ''],
+      ]),
+    },
+  )
+  assert.deepEqual(aggregate.bySession.rows, [
+    { id: 'beta', title: 'Bravo', tokens: 40, lastDay: '2026-11-01' },
+    { id: 'alpha', title: null, tokens: 15, lastDay: '2026-11-02' },
+  ])
+  assert.equal(aggregate.bySession.total, 2)
+  assert.equal(aggregate.bySession.truncated, false)
+  assert.equal(aggregate.totals.tokens, 731, 'archived, subagent, and removed Sessions still count in the totals')
+  assert.equal(aggregate.sessions.retired, 1)
+}
+
+{
+  // Titles cannot be fetched without the archive set; the response then omits
+  // the list instead of claiming every Session is unarchived.
+  const aggregate = aggregateStats(
+    { a: { activeMs: 0, day: { '2026-11-01': { m: 1 } }, dayTurns: {} } },
+    { today: '2026-11-01', skipped: 0, total: 1 },
+  )
+  assert.equal(aggregate.bySession, undefined)
+}
+
+{
+  // The wire list is capped; the total still reports every matching Session.
+  const sessions = {}
+  for (let index = 0; index < SESSION_LIST_LIMIT + 5; index += 1) {
+    const id = `s${String(index).padStart(3, '0')}`
+    sessions[id] = { activeMs: 0, day: { '2026-11-01': { m: index + 1 } }, dayTurns: {} }
+  }
+  const aggregate = aggregateStats(sessions, { today: '2026-11-02', skipped: 0, total: 205, archived: new Set() })
+  assert.equal(aggregate.bySession.rows.length, SESSION_LIST_LIMIT)
+  assert.equal(aggregate.bySession.total, SESSION_LIST_LIMIT + 5)
+  assert.equal(aggregate.bySession.truncated, true)
+  assert.equal(aggregate.bySession.rows[0].tokens, SESSION_LIST_LIMIT + 5, 'rows are ordered by usage')
 }
 
 assert.equal(CACHE_VERSION, 3, 'the cache version changed when removed sessions started being retained')
@@ -613,6 +701,108 @@ await withStateDir(async (stateDir) => {
   try {
     const result = await host.service.command({ action: 'getStats' })
     assert.equal(result.error.code, 'scan-failed')
+  } finally {
+    host.restore()
+  }
+})
+
+// The per-Session list follows the Workspace registry's archive set: archived
+// Sessions disappear from the rows while their usage keeps counting.
+await withStateDir(async (stateDir) => {
+  const host = boot(corpus(), { stateDir, archived: ['session-b'], titles: { 'session-a': 'Alpha chat' } })
+  try {
+    const result = await host.service.command({ action: 'getStats' })
+    assert.equal(result.error, undefined)
+    assert.equal(result.stats.totals.tokens, 360, 'archived usage still counts in the totals')
+    assert.deepEqual(result.stats.bySession.rows, [
+      { id: 'session-a', title: 'Alpha chat', tokens: 150, lastDay: '2026-11-01' },
+      { id: 'session-c', title: null, tokens: 10, lastDay: '2026-11-02' },
+    ])
+    assert.equal(result.stats.bySession.total, 2)
+    assert.equal(result.stats.bySession.truncated, false)
+  } finally {
+    host.restore()
+  }
+})
+
+// Subagent children are hidden from the Session list by the host, so they are
+// not rows here either; their usage still counts in the totals.
+await withStateDir(async (stateDir) => {
+  const withChild = [
+    ...corpus(),
+    storedSession(
+      'session-child',
+      day(2026, 11, 2),
+      [usageEvent(0, day(2026, 11, 2) + 3000, 'group/m1', { totalTokens: 90 })],
+      { origin: 'subagent' },
+    ),
+  ]
+  const host = boot(withChild, { stateDir })
+  try {
+    const result = await host.service.command({ action: 'getStats' })
+    assert.equal(result.stats.totals.tokens, 450, 'subagent usage still counts in the totals')
+    assert.deepEqual(
+      result.stats.bySession.rows.map((row) => row.id),
+      ['session-b', 'session-a', 'session-c'],
+      'subagent Sessions are not rows',
+    )
+  } finally {
+    host.restore()
+  }
+})
+
+// A deleted Session leaves the per-Session list while its retained fold keeps
+// feeding the totals.
+await withStateDir(async (stateDir) => {
+  const first = boot(corpus(), { stateDir, titles: { 'session-b': 'Beta' } })
+  try {
+    await first.service.command({ action: 'getStats' })
+  } finally {
+    first.restore()
+  }
+
+  const reduced = corpus().filter((entry) => entry.snapshot.header.id !== 'session-b')
+  const afterDelete = boot(reduced, { stateDir, titles: { 'session-b': 'Beta' } })
+  try {
+    const result = await afterDelete.service.command({ action: 'getStats' })
+    assert.equal(result.stats.totals.tokens, 360, 'the deleted Session still counts in the totals')
+    assert.equal(result.stats.sessions.retired, 1)
+    assert.deepEqual(
+      result.stats.bySession.rows.map((row) => row.id),
+      ['session-a', 'session-c'],
+      'removed Sessions are not listed',
+    )
+    assert.equal(result.stats.bySession.total, 2)
+  } finally {
+    afterDelete.restore()
+  }
+})
+
+// An unavailable archive set omits the list instead of leaking archived rows.
+await withStateDir(async (stateDir) => {
+  const host = boot(corpus(), { stateDir, registryFails: true })
+  try {
+    const result = await host.service.command({ action: 'getStats' })
+    assert.equal(result.error, undefined, 'an unavailable archive set does not fail the scan')
+    assert.equal(result.stats.bySession, undefined, 'the list is omitted rather than shown unfiltered')
+    assert.equal(result.stats.totals.tokens, 360)
+  } finally {
+    host.restore()
+  }
+})
+
+// Titles are optional: a failing Session list only costs the labels.
+await withStateDir(async (stateDir) => {
+  const host = boot(corpus(), { stateDir, titlesFail: true })
+  try {
+    const result = await host.service.command({ action: 'getStats' })
+    assert.equal(result.error, undefined)
+    assert.deepEqual(
+      result.stats.bySession.rows.map((row) => row.title),
+      [null, null, null],
+      'rows survive without titles',
+    )
+    assert.equal(result.stats.bySession.rows[0].id, 'session-b', 'rows stay ordered by usage')
   } finally {
     host.restore()
   }

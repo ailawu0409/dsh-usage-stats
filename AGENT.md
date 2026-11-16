@@ -4,7 +4,7 @@
 
 ## 项目概述
 
-dsh-usage-stats 是一个非官方的 DeepSeek Harness 设置面板插件，在「设置 → 使用统计」中展示本机会话的 Token 用量、活跃情况、聊天时长和模型分布。
+dsh-usage-stats 是一个非官方的 DeepSeek Harness 设置面板插件，在「设置 → 使用统计」中展示本机会话的 Token 用量、按会话的用量排行（仅未归档会话）、活跃情况、聊天时长和模型分布。
 
 插件只读取本机会话日志，不联网、不上报；唯一写入是自己的折叠缓存文件。修改时必须保持这一隐私边界。
 
@@ -21,16 +21,16 @@ dsh-usage-stats 是一个非官方的 DeepSeek Harness 设置面板插件，在�
 
 | 路径 | 职责 | 随 npm 包发布 |
 | --- | --- | --- |
-| `index.js` | Host 端：扫描会话、聚合统计、增量缓存和 Remote 服务 | ✓ |
-| `client.js` | Client 端：设置页、图表、交互、主题和国际化 | ✓ |
+| `index.js` | Host 端：扫描会话、聚合统计、按会话列表（归档过滤与标题）、增量缓存和 Remote 服务 | ✓ |
+| `client.js` | Client 端：设置页、图表、会话用量卡片、交互、主题和国际化 | ✓ |
 | `cordis.patch.yml` | 插件行注册 | ✓ |
 | `locale/en.json`、`locale/zh.json` | 插件清单的中英文标题与描述 | ✓ |
 | `icon.svg` | 插件图标 | ✓ |
 | `package.json` | 包导出、DSH 插件配置、`files` 清单和开发脚本 | ✓ |
 | `README.md`、`README.zh-CN.md` | 功能、统计口径、安装和开发说明（英文 / 中文） | ✓ |
 | `LICENSE` | MIT 许可 | ✓ |
-| `test/host.test.mjs` | Host 端统计、缓存、失败处理与迁移测试 | — |
-| `test/client.test.mjs` | Client 端界面、图表、文案与交互测试 | — |
+| `test/host.test.mjs` | Host 端统计、按会话列表、缓存、失败处理与迁移测试 | — |
+| `test/client.test.mjs` | Client 端界面、图表、会话用量卡片、文案与交互测试 | — |
 | `AGENT.md` | 本文件：开发代理指南（中文） | — |
 | `CONTRIBUTING.md` | 贡献指南 | — |
 | `SECURITY.md` | 安全策略与隐私边界 | — |
@@ -46,10 +46,10 @@ dsh-usage-stats 是一个非官方的 DeepSeek Harness 设置面板插件，在�
 | 位置 | 约定 |
 | --- | --- |
 | Host `inject` | `['typert']` |
-| Host 依赖 | `sessionQuery.readSession(id)`（优先）、`sessionPersistence.list()` / `.open(id, 'read')`（回退）、`logger`、`typert.register()` |
+| Host 依赖 | `sessionQuery.readSession(id)`（优先）、`sessionPersistence.list()` / `.open(id, 'read')`（回退）、`workspaceRegistry.archivedSessionIds`（可选，归档过滤）、`sessionController.list({}, signal)`（可选，仅会话标题）、`logger`、`typert.register()` |
 | Host 提供 | `ctx.provide('usageStats', { command })`；Typert invocation id 为 `dsh-usage-stats#usageStats/command` |
 | Remote 请求 | `{ action: 'getStats', force?: boolean }` 走增量；`{ action: 'refresh' }` 强制全量重读；非法请求返回 `bad-request` |
-| Remote 返回 | `{ stats }`，或 `{ error: { code, message } }`（`bad-request`、`stats-unavailable`、`scan-failed`） |
+| Remote 返回 | `{ stats }`，或 `{ error: { code, message } }`（`bad-request`、`stats-unavailable`、`scan-failed`）；`stats.bySession` 为可选字段（`{ rows: [{ id, title, tokens, lastDay }], total, truncated }`），只在能读到归档集合时出现 |
 | Client `inject` | `['slots', 'locale', 'remote', 'typert']`；`package.json` 的 `dsh.client.inject` 另外声明宿主 UI 包 |
 | Client Remote | `ctx.remote.$mount()` 注册 `dsh-usage-stats#usageStats/command`（strict codec），通过 `ctx.get('remote.usageStats').command()` 调用，并有 60 秒看门狗 |
 | Slots | `settings.section`（id `usage-stats`、order 101、locale `usage-stats`）与 `settings.section.icon`（**同一 id**）；`inject()` 返回 `actions` 与 `hooks: { stats, colorScheme, locale }`，宿主转成 `useStats` / `useColorScheme` / `useLocale` 传给组件 |
@@ -83,6 +83,8 @@ CI 在 ubuntu/windows × Node 22/24 上运行 `npm run check` 与 `npm test`，�
 - 保持日志读取为只读，不修改宿主持久化数据；`stats-unavailable` / `scan-failed` 返回错误对象而不是抛异常。
 - 统计口径必须与 `README.md` 及 `README.zh-CN.md` 一致：`totalTokens`（> 0）优先、否则 `inputTokens + outputTokens`；本地自然日；轮次按 `turn/start` 开始日计；最长聊天为单会话内已完成 `turn/start → turn/end` 时长之和的最大值；模型名取 `message.source.model`，回退 `source.provider`，再回退 `unknown`。
 - Fork 会话必须排除继承前缀 `seq < inheritedEventCount`，避免与父会话重复计数。
+- 按会话列表只从「仍在持久化列表中、不在 `workspaceRegistry.archivedSessionIds` 中、`header.origin !== 'subagent'`（宿主会话列表同样隐藏子智能体行）、且折叠 Token > 0」的条目生成，按 Token 降序（同量按 id 升序），最多 `SESSION_LIST_LIMIT = 200` 行；`bySession` 只在能读到归档集合时返回，读不到时省略该字段（页面隐藏卡片），不得返回未过滤的列表。归档、子智能体与已删除会话仍按账本口径计入累计，不因列表过滤而改变。
+- 会话标题取 `sessionController.list()` 的 `projections.values.title`（宿主投影提示，冷会话由投影缓存提供，零额外日志读取）；缺失或读取失败只影响标题与回退文案。不要把标题写进折叠缓存，也不要因此改动缓存版本。
 - 用量聚合必须与会话列表解耦：会话从持久化列表消失（永久删除、移出存储、暂时不可用）时保留其折叠结果并继续计入历史；不得因会话消失或单次读取失败让累计值回退。设计参考 ZCode 的 `model_usage` 用量账本（统计查询不 join 会话表、删除为软删除）。
 - 保留对读取失败、`migration-required`、失败冷却（5 分钟）和会话数量上限的处理；已有上次结果时沿用，只有从未统计过的会话才计入跳过。
 - 缓存结构变化时，同步处理缓存版本迁移和增量统计逻辑；当前 v2→v3 为兼容迁移（v1 及未知版本才丢弃重建），不得丢弃可迁移的历史。
@@ -101,6 +103,7 @@ CI 在 ubuntu/windows × Node 22/24 上运行 `npm run check` 与 `npm test`，�
 - 趋势图最多绘制 6 条模型序列（按所选窗口内用量排名），悬停明细限于这些序列；近 7 日为 8 个点、近 30 日为 31 个点，X 轴最多 8 个日期标签；环形图为前 5 模型 + Other。
 - 刷新按钮为 sticky 右下角，触发 Host 全量重扫；保留首屏全页错误、刷新失败顶部可重试 banner、渲染崩溃 ErrorBoundary 三种状态，刷新失败时不得清空已有数据。
 - 底部说明行需覆盖会话数、保留历史、跳过、截断提示与「数据来自本机会话日志」，中英文案保持一致。
+- 「会话用量」卡片只渲染 Host 给出的行，不自行过滤归档或重排；缺 `stats.bySession`（旧 Host 或归档集合不可用）时整张卡片不渲染；标题缺失时显示「未命名会话 · 短 id」，并保留最近活跃日期与用量占比条。
 - 不将 Host 专属 API、Node.js 内置模块或文件系统访问带入 Client。
 - 宿主 0.2.2 起提供 `settings.section.icon` slot；`client.js` 用与 `settings.section` 相同的 id 注册柱状图图标，不修改宿主 DOM。宿主未提供该 slot 时保留默认齿轮且不报错。
 

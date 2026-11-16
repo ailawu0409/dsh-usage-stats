@@ -72,6 +72,13 @@ window.__ModuleLoader__.load({
       'models.title': '模型用量',
       'models.other': '其他模型',
       'models.share': '{percent}%',
+      'bySession.title': '会话用量',
+      'bySession.note': '仅显示未归档会话；已归档、已删除和子智能体会话不在此列表（其历史用量仍计入上方累计）。归档或删除后请点击刷新。',
+      'bySession.empty': '暂无未归档会话的用量记录。',
+      'bySession.untitled': '未命名会话',
+      'bySession.total': '共 {count} 个有使用量的未归档会话',
+      'bySession.truncated': '仅显示用量最高的 {count} 个',
+      'bySession.lastActive': '最近活跃',
       refresh: '刷新',
       refreshing: '统计中…',
       loading: '正在统计用量…',
@@ -123,6 +130,13 @@ window.__ModuleLoader__.load({
       'models.title': 'Model usage',
       'models.other': 'Other models',
       'models.share': '{percent}%',
+      'bySession.title': 'Usage by session',
+      'bySession.note': 'Only unarchived sessions are listed; archived, deleted, and subagent sessions are excluded here though their history still counts in the totals above. Refresh after archiving or deleting.',
+      'bySession.empty': 'No usage from unarchived sessions yet.',
+      'bySession.untitled': 'Untitled session',
+      'bySession.total': '{count} unarchived sessions with usage',
+      'bySession.truncated': 'showing the top {count} by usage',
+      'bySession.lastActive': 'Last active',
       refresh: 'Refresh',
       refreshing: 'Measuring…',
       loading: 'Measuring usage…',
@@ -207,6 +221,20 @@ window.__ModuleLoader__.load({
 .us-modelName{overflow:hidden;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap}
 .us-modelShare{flex:none;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary)}
 .us-modelTokens{font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-tertiary)}
+/* Per-session usage rows: the list scrolls inside the card so a long history
+   cannot stretch the settings page. */
+.us-sessionNote{margin:10px 0 0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
+.us-sessionEmpty{margin:12px 0 0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.us-sessionList{display:flex;flex-direction:column;max-height:360px;margin:4px -16px 0;padding:0 16px;overflow-y:auto}
+.us-sessionRow{display:flex;align-items:flex-start;gap:12px;padding:9px 0;border-top:.5px solid var(--dsw-alias-border-l1)}
+.us-sessionRow:first-child{padding-top:4px;border-top:none}
+.us-sessionMain{display:flex;flex:1 1 auto;flex-direction:column;gap:6px;min-width:0}
+.us-sessionName{overflow:hidden;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-overflow:ellipsis;white-space:nowrap}
+.us-sessionBar{display:block;height:3px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
+.us-sessionBarFill{display:block;height:100%;min-width:2px;border-radius:999px;background:var(--dsw-alias-brand-primary)}
+.us-sessionSide{display:flex;flex:none;flex-direction:column;align-items:flex-end;gap:1px}
+.us-sessionTokens{font-size:12px;line-height:18px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary)}
+.us-sessionMeta{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
 .us-actions{display:flex;justify-content:flex-end;position:sticky;bottom:8px;padding:0 2px}
 .us-refresh{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 12px;border:.5px solid var(--dsw-alias-border-l3,var(--dsw-alias-border-l2));border-radius:var(--dsw-radius-md,var(--dsw-radius-lg));background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;white-space:nowrap;cursor:pointer;box-shadow:var(--dsw-elevation-soft,0 1px 2px rgba(0,0,0,.08))}
 .us-refresh:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover,var(--dsw-alias-bg-layer-2))}
@@ -509,6 +537,35 @@ window.__ModuleLoader__.load({
         byDay.set(entry.day, entry)
       }
       return byDay
+    }
+
+    /** Session rows of the wire payload, tolerant of an older Host half. */
+    function sessionRowsOf(stats) {
+      const rows = stats?.bySession?.rows
+      if (!Array.isArray(rows)) return []
+      return rows.filter((row) => row !== null && typeof row === 'object')
+    }
+
+    /** Leading characters of a Session id, used when the Session has no title. */
+    function shortSessionId(id) {
+      const text = typeof id === 'string' ? id : ''
+      return text.length > 8 ? text.slice(0, 8) : text
+    }
+
+    /** Display name of one per-Session row. */
+    function sessionNameOf(row, t) {
+      const title = typeof row?.title === 'string' ? row.title.trim() : ''
+      if (title.length > 0) return title
+      const suffix = shortSessionId(row?.id)
+      const fallback = t('bySession.untitled')
+      return suffix.length > 0 ? `${fallback} · ${suffix}` : fallback
+    }
+
+    /** Bar width of one row, relative to the busiest listed Session. */
+    function sessionShareOf(tokens, maxTokens) {
+      if (!Number.isFinite(tokens) || tokens <= 0) return 0
+      if (!Number.isFinite(maxTokens) || maxTokens <= 0) return 0
+      return Math.min(100, Math.max(0, Math.round((tokens / maxTokens) * 100)))
     }
 
     /**
@@ -1331,6 +1388,81 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * Per-Session usage card: unarchived Sessions only, busiest first.
+     *
+     * The Host half decides the membership; this card only renders the rows it
+     * receives and explains the scope, so a missing `bySession` (older Host or
+     * an unavailable archive set) simply removes the card.
+     */
+    function SessionUsageCard(props) {
+      const { stats, chinese, t } = props
+      const rows = sessionRowsOf(stats)
+      const bySession = stats?.bySession
+      const total = Number.isFinite(bySession?.total) ? bySession.total : rows.length
+      const truncated = bySession?.truncated === true
+      let maxTokens = 0
+      for (const row of rows) {
+        if (Number.isFinite(row.tokens) && row.tokens > maxTokens) maxTokens = row.tokens
+      }
+      const scope = [
+        t('bySession.total', { count: total }),
+        truncated ? t('bySession.truncated', { count: rows.length }) : null,
+      ]
+        .filter((part) => part !== null)
+        .join(' · ')
+      return h(
+        'section',
+        { className: 'us-card' },
+        h('div', { className: 'us-cardHead' }, h('h3', { className: 'us-cardTitle' }, t('bySession.title'))),
+        h(
+          'div',
+          { className: 'us-cardBody' },
+          h('p', { className: 'us-sessionNote' }, t('bySession.note')),
+          rows.length === 0
+            ? h('p', { className: 'us-sessionEmpty' }, t('bySession.empty'))
+            : h(
+                'div',
+                { className: 'us-sessionList', role: 'list' },
+                rows.map((row) => {
+                  const tokens = Number.isFinite(row.tokens) ? Math.max(0, row.tokens) : 0
+                  const name = sessionNameOf(row, t)
+                  const lastDay =
+                    typeof row.lastDay === 'string' && row.lastDay.length > 0 ? row.lastDay : null
+                  return h(
+                    'div',
+                    { className: 'us-sessionRow', role: 'listitem', key: row.id },
+                    h(
+                      'div',
+                      { className: 'us-sessionMain' },
+                      h('span', { className: 'us-sessionName', title: name }, name),
+                      h(
+                        'span',
+                        { className: 'us-sessionBar', 'aria-hidden': 'true' },
+                        h('span', {
+                          className: 'us-sessionBarFill',
+                          style: { width: `${sessionShareOf(tokens, maxTokens)}%` },
+                        }),
+                      ),
+                    ),
+                    h(
+                      'div',
+                      { className: 'us-sessionSide' },
+                      h('span', { className: 'us-sessionTokens' }, `${formatTokens(tokens, chinese)} ${t('unit.tokens')}`),
+                      h(
+                        'span',
+                        { className: 'us-sessionMeta', title: t('bySession.lastActive') },
+                        lastDay === null ? t('unit.zero') : formatDayLabel(lastDay, chinese),
+                      ),
+                    ),
+                  )
+                }),
+              ),
+          rows.length === 0 ? null : h('p', { className: 'us-sessionNote' }, scope),
+        ),
+      )
+    }
+
     /** Full page. */
     function UsageStatsView(props) {
       // The slot turns `inject()`'s `hooks` map into `use<Name>` selector hooks.
@@ -1441,6 +1573,7 @@ window.__ModuleLoader__.load({
         ),
         empty ? null : h(TrendCard, { stats, windowDays: rangeDays + 1, chinese, t, scheme }),
         h(ModelUsageCard, { stats, chinese, t, scheme }),
+        empty || stats.bySession === undefined ? null : h(SessionUsageCard, { stats, chinese, t }),
         h(
           'div',
           { className: 'us-actions' },
@@ -1677,6 +1810,11 @@ window.__ModuleLoader__.load({
         TokenActivityCard,
         TrendCard,
         ModelUsageCard,
+        SessionUsageCard,
+        sessionRowsOf,
+        sessionNameOf,
+        sessionShareOf,
+        shortSessionId,
         buildHeatmap,
         buildTrend,
         donutSegments,
