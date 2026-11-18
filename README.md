@@ -8,12 +8,12 @@ A community plugin for DeepSeek Harness that adds a **Usage Statistics** section
 
 > **Unofficial plugin:** Not affiliated with or endorsed by DeepSeek. DSH extension APIs may change between releases.
 >
-> **Version note:** the version in `package.json` (currently `0.3.0`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes below are advisory.
+> **Version note:** the version in `package.json` (currently `0.3.1`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes below are advisory.
 
 ## Features
 
 - **Overview metrics (3)**: total tokens, peak tokens (single day), and longest chat duration.
-- **Token activity heatmap**: GitHub-style weekly grid with Daily / Weekly / Cumulative color modes. In Daily mode hovering a cell shows the date, tokens and turns (e.g. `Oct 27, 2026` / `506K tokens · 2 turns`); Weekly shows the week total and Cumulative shows the tokens accumulated up to that day. The summary line follows the mode (active days / active weeks / accumulated tokens) and counts only the range the grid draws.
+- **Token activity heatmap**: GitHub-style weekly grid with Daily / Weekly / Cumulative color modes. In Daily mode hovering a cell shows the date, tokens and turns (e.g. `Oct 27, 2026` / `506 K tokens · 2 turns`); Weekly shows the week total and Cumulative shows the tokens accumulated up to that day. The summary line follows the mode (active days / active weeks / accumulated tokens) and counts only the range the grid draws.
   - Cells stay at the reference 11px; the number of weeks adapts to the panel width (up to 53, at least 13). The summary states the actual range, for example "over the last 8 months".
 - **Daily token trend**: smoothed lines colored by model, with Last 7 days / Last 30 days ranges (8 / 31 points including today, with at most 8 date labels on the axis). Hover shows a vertical cursor, highlighted points, and a per-model breakdown for that day. Only the six models with the most tokens in the selected range are plotted, and the hover breakdown lists those series; the remaining models are not drawn individually (they are aggregated into "Other models" in the donut chart).
 - **Model usage**: donut chart plus a share list (top 5 models + Other); hovering a segment shows its tokens and share.
@@ -25,7 +25,7 @@ A community plugin for DeepSeek Harness that adds a **Usage Statistics** section
 
 ## Compatibility
 
-- Verified against DeepSeek Harness `0.2.2-rc.3` (desktop). The plugin relies only on contracts that are unchanged since `0.2.2-rc.1`, so rc.1, rc.2, and rc.3 behave the same; `0.2.2-rc.1` or newer is recommended.
+- Verified against DeepSeek Harness `0.2.2-rc.3` (desktop). The plugin relies only on contracts that are unchanged since `0.2.2-rc.1`, so rc.1 and rc.2 are expected to behave the same; `0.2.2-rc.1` or newer is recommended. On hosts that lack the Workspace registry or session-list service, the per-session card or titles are unavailable, but the other statistics still work.
 - On DeepSeek Harness 0.2.2 and newer, the Settings navigation icon is registered through the official `settings.section.icon` slot (section id `usage-stats`, order 101). Hosts older than 0.2.2 do not have that seat and show the default gear without error.
 - Node.js 22 or newer for local development and tests. CI runs Node.js 22 and 24; there are no third-party runtime dependencies and no build step.
 - The Settings UI is available in English and Chinese. Other host languages introduced in DSH 0.2.2 fall back to English for this plugin's text.
@@ -42,7 +42,7 @@ All data comes from **local session logs** (read-only; no network access and not
 - Heatmap summary: counts only the range the grid actually draws, never history outside the window.
 - Deduplication: forked sessions skip the inherited prefix (`seq < inheritedEventCount`), so they are not counted twice with their parent.
 - History retention: after a session is archived, moved out of storage, or permanently deleted, its folded usage still contributes to totals, peak, heatmap, and model share. The footer notes "Includes history from N session(s) no longer listed". This follows the same usage-ledger idea as ZCode: statistics do not depend on the session list.
-- Session list: only Sessions that are still listed in persistence, are not in the host Workspace registry's archive set (`archivedSessionIds`), are not subagent children (`header.origin === 'subagent'`), and have a token total above zero become rows. Deleted (`retiredAt`), archived, and subagent Sessions are excluded from the list while still counting in the totals under the rule above. Rows are ordered by token usage, capped at 200 and scrolled inside the card; the footer notes "showing the top 200 by usage" when the cap is hit.
+- Session list: only Sessions that are still listed in persistence, are not in the host Workspace registry's archive set (`archivedSessionIds`), are not subagent children (`header.origin === 'subagent'`), and have a token total above zero become rows. Deleted (`retiredAt`), archived, and subagent Sessions are excluded from the list while still counting in the totals under the rule above. Rows are ordered by token usage, capped at 200 and scrolled inside the card; the card notes "showing the top 200 by usage" when the cap is hit.
 - Session titles: taken from the host session list's projection hints (the same titles the sidebar shows); cold Sessions come from the host's projection cache, so no extra log reads happen. A missing title (or a host without the session-list service) falls back to "Untitled session · short id", and the last active day is the Session's last day with usage.
 - Failure retention: a failed read or a `migration-required` session never makes accumulated values shrink; the previous result is retained. Only sessions that have never been counted are reported as skipped. Failed sessions cool down for 5 minutes and are not re-read on every scan.
 - Session count: the footer's "Across N sessions" includes retained history, so it can exceed the number of sessions currently stored.
@@ -84,7 +84,7 @@ dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats
 To install a specific release, use its tag, for example:
 
 ```sh
-dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats#v0.3.0
+dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats#v0.3.1
 ```
 
 For local development, link the package directory into the profile:
@@ -129,7 +129,7 @@ The donut chart shows the top five models plus an aggregated **Other models** se
 
 ### Usage by session
 
-The card ranks unarchived Sessions by token usage, busiest first, and scrolls inside the card when there are more than 200 rows. Each row shows the Session title, the last active day, and a usage bar relative to the busiest listed Session. Archived, deleted, and subagent Sessions are not listed, but their usage still counts in the totals above. A Session without a title is shown as "Untitled session · short id".
+The card ranks unarchived Sessions by token usage, busiest first, shows at most 200 rows, and scrolls inside the card when the list is taller than the card. Each row shows the Session title, the last active day, and a usage bar relative to the busiest listed Session. Archived, deleted, and subagent Sessions are not listed, but their usage still counts in the totals above. A Session without a title is shown as "Untitled session · short id".
 
 The list reflects the archive state of the last scan. After archiving, unarchiving, or deleting a Session in the host's archive UI, reopen this page or press **Refresh** to update the list. When the host Workspace registry is unavailable, the card is hidden and the other statistics are unaffected.
 

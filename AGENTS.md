@@ -12,7 +12,7 @@ dsh-usage-stats 是一个非官方的 DeepSeek Harness 设置面板插件，在�
 
 | 项目 | 当前情况 |
 | --- | --- |
-| npm 包名 / 版本 | `dsh-usage-stats` / `0.3.0`（插件版本，与宿主版本无关） |
+| npm 包名 / 版本 | `dsh-usage-stats` / `0.3.1`（插件版本，与宿主版本无关） |
 | 已验证宿主 | DeepSeek Harness `0.2.2-rc.3` Desktop；`0.2.2-rc.1` 起的接口契约未变化，建议使用 rc.1 或更新版本 |
 | 导航图标 | DSH `0.2.2` 起提供 `settings.section.icon`；更旧宿主保留默认齿轮且不报错 |
 | 运行时 | JavaScript ES Modules，Node.js `>= 22`；无第三方运行时依赖、无构建步骤 |

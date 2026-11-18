@@ -1,6 +1,6 @@
 {
   "name": "dsh-usage-stats",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "description": "Usage statistics in Settings: token totals, per-session usage, activity heatmap, daily trend by model, and model share.",
   "license": "MIT",
