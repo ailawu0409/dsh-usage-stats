@@ -6,9 +6,9 @@
 
 A community plugin for DeepSeek Harness that adds a **Usage Statistics** section to Settings: token totals, per-session usage, activity, chat duration, and model share for local sessions.
 
-> **Unofficial plugin:** Not affiliated with or endorsed by DeepSeek. DSH extension APIs may change between releases. Verified against DeepSeek Harness 0.2.2-rc.3; 0.2.2-rc.1 or newer is recommended.
+> **Unofficial plugin:** Not affiliated with or endorsed by DeepSeek. DSH extension APIs may change between releases.
 >
-> **Version note:** the version in `package.json` (currently `0.3.0`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes above are advisory.
+> **Version note:** the version in `package.json` (currently `0.3.0`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes below are advisory.
 
 ## Features
 
@@ -23,9 +23,16 @@ A community plugin for DeepSeek Harness that adds a **Usage Statistics** section
 - Errors are presented in three states: a first load without data shows a full-page error with a retry button; a failed refresh keeps the existing data and shows one retryable banner at the top; a rendering crash is contained by an error boundary with its own retry.
 - A footer note reports the counted sessions, retained history, skipped sessions, a truncation notice when the cap is hit, and the local-only data source.
 
+## Compatibility
+
+- Verified against DeepSeek Harness `0.2.2-rc.3` (desktop). The plugin relies only on contracts that are unchanged since `0.2.2-rc.1`, so rc.1, rc.2, and rc.3 behave the same; `0.2.2-rc.1` or newer is recommended.
+- On DeepSeek Harness 0.2.2 and newer, the Settings navigation icon is registered through the official `settings.section.icon` slot (section id `usage-stats`, order 101). Hosts older than 0.2.2 do not have that seat and show the default gear without error.
+- Node.js 22 or newer for local development and tests. CI runs Node.js 22 and 24; there are no third-party runtime dependencies and no build step.
+- The Settings UI is available in English and Chinese. Other host languages introduced in DSH 0.2.2 fall back to English for this plugin's text.
+
 ## Data source and accounting
 
-All data comes from **local session logs** (read-only; no network access and nothing is uploaded). The only file the plugin writes is its own fold cache.
+All data comes from **local session logs** (read-only; no network access and nothing is uploaded). The plugin reads through the host's session services; the only file the plugin writes is its own fold cache.
 
 - Total tokens: sum of `usage` on every `assistant/message` (`totalTokens` when present and positive, otherwise `inputTokens + outputTokens`).
 - Peak tokens: highest single-day usage, using the local time zone calendar day.
@@ -41,6 +48,14 @@ All data comes from **local session logs** (read-only; no network access and not
 - Session count: the footer's "Across N sessions" includes retained history, so it can exceed the number of sessions currently stored.
 - Cap: one scan reads and folds at most 20,000 **currently listed** sessions. When the listing is larger, the page shows a truncation note. Retained history and already-cached entries are still counted, so the displayed session count can exceed 20,000.
 - Lifetime vs window: totals, peak, longest chat, and model share are computed from **all** folded history. Only the per-day detail sent to the Client is limited to a lookback of about 400 days (today plus the preceding 400 days, up to 401 daily points), which covers the 53-week heatmap and both trend ranges.
+
+## Local data and privacy
+
+The plugin has no telemetry, analytics, or network requests. It reads local session logs read-only through DeepSeek Harness's session services and writes only one file per profile:
+
+- `<profile>/plugin-state/usage-stats-cache.json` — folded per-session token counts, per-day model buckets, turn counts, active durations, and `retiredAt`. The cache contains session IDs and model names but no message text, prompts, titles, or credentials.
+
+Each DSH profile has its own `plugin-state` directory. The cache is loaded into memory once at plugin startup; later scans do not re-read the file. To clear all history, **fully quit DeepSeek Harness, delete the cache file, then restart the app** — see [Performance and cache](#performance-and-cache). Treat the cache as local data and do not attach it to public issues without review.
 
 ## Performance and cache
 
@@ -58,16 +73,18 @@ All data comes from **local session logs** (read-only; no network access and not
 
 ## Install
 
+Open DeepSeek Harness Desktop once so its `desktop` profile exists, then fully quit the application before running any `dsh plugin --profile desktop ...` command. The command manages the profile and must not run while the app is using it.
+
 From GitHub:
 
 ```sh
-dsh plugin --profile desktop add https://github.com/ailawu0409/dsh-usage-stats
+dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats
 ```
 
-Or use a local package path or a fork:
+To install a specific release, use its tag, for example:
 
 ```sh
-dsh plugin --profile desktop add <package-path-or-repo-url>
+dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats#v0.3.0
 ```
 
 For local development, link the package directory into the profile:
@@ -76,9 +93,59 @@ For local development, link the package directory into the profile:
 dsh plugin --profile desktop add /path/to/dsh-usage-stats
 ```
 
-Restart DeepSeek Harness and open **Settings → Usage Statistics** (below Archived sessions).
+Use `github:<your-account>/dsh-usage-stats` for a fork. Restart DeepSeek Harness, then open **Settings → Usage Statistics** (below Archived sessions). If you use a profile other than `desktop`, replace `desktop` consistently in these commands.
 
-Verified against DeepSeek Harness 0.2.2-rc.3. DeepSeek Harness 0.2.2-rc.1 or newer is recommended for the custom navigation icon; older hosts fall back to the default gear without error.
+### Upgrade
+
+Back up important local data, fully quit DeepSeek Harness, run the installation command again to fetch the desired revision, and restart the application. Check the [release notes](https://github.com/ailawu0409/dsh-usage-stats/releases) before upgrading. Existing plugin cache files are not intentionally cleared by an upgrade.
+
+### Uninstall
+
+Fully quit DeepSeek Harness, then remove the package and restart:
+
+```sh
+dsh plugin --profile desktop remove dsh-usage-stats
+```
+
+Removing the package does not delete the plugin's cache file. To remove the remaining local statistics as well, delete `<profile>/plugin-state/usage-stats-cache.json` while the app is not running.
+
+## Usage
+
+### Overview
+
+The page opens with three metrics: **total tokens** across all folded history, **peak tokens** for a single day, and the **longest chat** duration measured from completed turns. All three are lifetime figures, even when the trend range is Last 7 days or Last 30 days.
+
+### Token activity heatmap
+
+Choose **Daily**, **Weekly**, or **Cumulative** in the card header. Daily colors each day by its own tokens; Weekly colors each column by that week's total; Cumulative colors each day by the tokens accumulated up to that day. Hover a cell to see the date and the value for the active mode. The summary line follows the same mode and reports only the range the grid actually draws. Cells stay at 11px; the grid shows 13 to 53 weeks depending on the panel width, so a narrow Settings panel shows fewer weeks rather than shrinking cells.
+
+### Daily token trend
+
+Use **Last 7 days** or **Last 30 days** above the chart. The chart plots 8 or 31 points including today and shows at most 8 date labels. Lines are colored by model; only the six models with the most tokens in the selected range are drawn, and the hover breakdown lists those six series. Other models still appear in the donut chart's "Other models" segment.
+
+### Model usage
+
+The donut chart shows the top five models plus an aggregated **Other models** segment. Hover a segment to see its token count and share; the list beside the chart shows the same shares.
+
+### Usage by session
+
+The card ranks unarchived Sessions by token usage, busiest first, and scrolls inside the card when there are more than 200 rows. Each row shows the Session title, the last active day, and a usage bar relative to the busiest listed Session. Archived, deleted, and subagent Sessions are not listed, but their usage still counts in the totals above. A Session without a title is shown as "Untitled session · short id".
+
+The list reflects the archive state of the last scan. After archiving, unarchiving, or deleting a Session in the host's archive UI, reopen this page or press **Refresh** to update the list. When the host Workspace registry is unavailable, the card is hidden and the other statistics are unaffected.
+
+### Refresh and states
+
+The sticky **Refresh** button in the bottom-right corner triggers a full re-scan of every currently listed Session, not just a redraw. While it runs the button shows "Measuring…" and is disabled. The page shows a loading skeleton on first load, an empty state when no usage exists, a full-page error with a retry button when the first load fails, and a retryable banner at the top when a refresh fails while existing data remains on screen. A rendering error is contained by an error boundary with its own retry.
+
+## Troubleshooting
+
+- **Usage Statistics is missing from Settings.** Confirm the package is installed in the active profile and restart DeepSeek Harness. On 0.2.2 and newer the navigation uses the plugin's bar-chart glyph; older hosts show the default gear for the section, which is expected.
+- **The page says usage statistics are unavailable.** The Client could not mount or call the Host Remote. Refresh the page, verify the host version and profile plugin, then restart DeepSeek Harness.
+- **Some sessions are skipped.** A log could not be read or is marked `migration-required`; the plugin keeps any previous result and reports only sessions that were never counted. Failed reads cool down for 5 minutes and are retried later or when you press Refresh.
+- **Refresh failed but the old numbers remain.** This is intentional: a failed refresh must not clear existing data. Retry, and restart the app if the error persists.
+- **Usage by session is missing or stale.** The host may not expose the Workspace registry's archive set, or the page has not scanned since the archive changed. Press Refresh; if the registry is unavailable the card stays hidden while the other statistics continue to work.
+- **Clearing history did not work.** Fully quit DeepSeek Harness before deleting `<profile>/plugin-state/usage-stats-cache.json`, then restart. Deleting the file while the app is running does not clear the in-memory cache and the next scan writes it back.
+- **Numbers differ from another usage tool.** This plugin prefers `usage.totalTokens`, otherwise `inputTokens + outputTokens`. ZCode's `computedTotalTokens` is `input + cache + output`, so values can legitimately differ; see Known limitations.
 
 ## Development
 
@@ -103,11 +170,11 @@ There are no third-party runtime dependencies. Tests use temporary directories a
 | `icon.svg` | Plugin icon |
 | `package.json` | Exports, DSH plugin configuration, `files` manifest and scripts |
 | `test/host.test.mjs`, `test/client.test.mjs` | Host / Client tests (repository only) |
-| `AGENT.md` | Development-agent guide, in Chinese (repository only) |
+| `AGENTS.md` | Development-agent guide, in Chinese (repository only) |
 | `CONTRIBUTING.md`, `SECURITY.md` | Contribution guide and security policy (repository only) |
 | `.github/workflows/ci.yml` | CI matrix and package check (repository only) |
 
-`npm pack --dry-run` publishes 10 files: `index.js`, `client.js`, `cordis.patch.yml`, `locale/en.json`, `locale/zh.json`, `icon.svg`, plus npm's automatic `package.json`, `LICENSE`, `README.md`, and `README.zh-CN.md`. `AGENT.md`, `CONTRIBUTING.md`, `SECURITY.md`, the CI workflow, and the tests stay in the repository.
+`npm pack --dry-run` publishes 10 files: `index.js`, `client.js`, `cordis.patch.yml`, `locale/en.json`, `locale/zh.json`, `icon.svg`, plus npm's automatic `package.json`, `LICENSE`, `README.md`, and `README.zh-CN.md`. `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, the CI workflow, and the tests stay in the repository.
 
 ## Known limitations
 
@@ -118,10 +185,9 @@ There are no third-party runtime dependencies. Tests use temporary directories a
 - The "Last 7 days" trend plots 8 points and "Last 30 days" plots 31 points (today plus the preceding days), matching the reference design; the date axis shows at most 8 labels.
 - The trend plots at most six model series, ranked by tokens in the selected range; other models appear only as part of "Other models" in the donut chart.
 - The 20,000 cap applies to currently listed sessions per scan, not to retained history, so the footer's session count can be higher.
-- The "Usage by session" list shows at most 200 rows and reflects the archive state of the last scan: after archiving, unarchiving, or deleting a Session in the host's archive UI, reopen this page or press Refresh to update the list. The list depends on the host Workspace registry; when that service is unavailable the card is hidden and the other statistics are unaffected.
+- The "Usage by session" list shows at most 200 rows and reflects the archive state of the last scan. It depends on the host Workspace registry; when that service is unavailable the card is hidden and the other statistics are unaffected.
 - On a narrow settings panel the heatmap reduces the number of weeks instead of shrinking cells, so a full year is not visible on narrow panels.
-- The settings navigation icon is registered through the `settings.section.icon` slot introduced in DSH 0.2.2 (the registration id equals the section id). Hosts older than 0.2.2 do not have that seat and show the default gear without error.
-- DSH 0.2.2 adds German, Spanish, French, Japanese, Portuguese, and Russian UI; this plugin's copy remains Chinese/English and falls back to English for other languages.
+- The empty state appears when total tokens are zero; an existing installation with cached history may still show numbers after the source sessions are gone.
 
 ## Contributing and security
 

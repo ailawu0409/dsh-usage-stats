@@ -2,15 +2,15 @@
 
 [English](README.md) | 中文
 
-DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展示本机会话的 Token 用量、按会话的用量排行、活跃情况、聊天时长与模型分布。
-
-> 非官方插件，与 DeepSeek 官方无隶属关系。DSH 扩展 API 可能随版本变化。已在 DeepSeek Harness 0.2.2-rc.3 上验证；建议使用 0.2.2-rc.1 或更新版本。
->
-> **版本说明**：`package.json` 中的版本号（当前 `0.3.0`）是插件版本，不是宿主版本；清单未声明宿主版本约束，上述兼容性说明仅供参考。
-
 [GitHub 仓库](https://github.com/ailawu0409/dsh-usage-stats) · [发布记录](https://github.com/ailawu0409/dsh-usage-stats/releases) · [问题反馈](https://github.com/ailawu0409/dsh-usage-stats/issues)
 
 [![CI](https://github.com/ailawu0409/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/ailawu0409/dsh-usage-stats/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展示本机会话的 Token 用量、按会话的用量排行、活跃情况、聊天时长与模型分布。
+
+> **非官方插件：** 与 DeepSeek 官方无隶属关系，也未经其背书。DSH 扩展 API 可能随版本变化。
+>
+> **版本说明：** `package.json` 中的版本号（当前 `0.3.0`）是插件版本，不是宿主版本；清单未声明宿主版本约束，因此下方兼容性说明仅供参考。
 
 ## 功能
 
@@ -25,9 +25,16 @@ DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展�
 - 错误分三种状态：首次加载且无数据显示整页错误与重试按钮；刷新失败时保留已有数据，仅在顶部显示一条可重试的提示；渲染崩溃由错误边界兜底并提供重试。
 - 页面底部说明行汇总：共统计会话数、已不在列表中的保留历史、已跳过会话、命中上限时的截断提示，以及「数据来自本机会话日志」。
 
-## 数据来源与口径
+## 兼容性
 
-全部数据来自**本机会话日志**（只读，不联网、不上报）；插件唯一写入的是自己的折叠缓存文件。
+- 已在 DeepSeek Harness `0.2.2-rc.3`（桌面版）上验证。插件只依赖 `0.2.2-rc.1` 以来未变化的契约，因此在 rc.1、rc.2、rc.3 上行为一致；建议使用 `0.2.2-rc.1` 或更新版本。
+- DeepSeek Harness 0.2.2 及以上通过官方 `settings.section.icon` slot 注册设置导航图标（section id `usage-stats`、order 101）。0.2.2 之前的宿主没有该入口，会显示默认设置齿轮，但不会报错。
+- 本地开发和测试需要 Node.js 22 或更高版本。CI 在 Node.js 22 和 24 上运行；无第三方运行时依赖，也无构建步骤。
+- 设置界面提供中英文文案；0.2.2 新增的其他宿主语言对本插件回退到英文。
+
+## 数据来源与统计口径
+
+全部数据来自**本机会话日志**（只读，不联网、不上报）。插件通过宿主的会话服务读取数据；唯一写入的是自己的折叠缓存文件。
 
 - 累计 Token：所有 `assistant/message` 的 `usage` 求和（优先取大于 0 的 `totalTokens`，否则 `inputTokens + outputTokens`）。
 - 峰值 Token：单日最高用量（按本机时区自然日）。
@@ -44,6 +51,14 @@ DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展�
 - 上限：单次扫描最多读取/折叠 **当前列表中** 20000 个会话；列表更长时页面会显示截断提示。已缓存条目与保留历史仍计入，因此显示的会话数可能超过 20000。
 - 全量历史与窗口：累计值、峰值、最长聊天与模型分布都基于**全部**折叠历史；只有发给 Client 的每日明细受约 400 天回看限制（今天 + 前 400 天，最多 401 个日点），足以覆盖 53 周热力图和两个趋势区间。
 
+## 本地数据与隐私
+
+插件没有遥测、分析或网络请求，只通过 DeepSeek Harness 的会话服务只读本地会话日志，并且每个 profile 只写入一个文件：
+
+- `<profile>/plugin-state/usage-stats-cache.json` —— 折叠后的每会话 Token 数、按日模型桶、轮次数、活跃时长与 `retiredAt`。缓存包含会话 ID 与模型名，但**不含消息正文、提示词、标题或凭据**。
+
+每个 DSH profile 有独立的 `plugin-state` 目录。缓存只在插件启动时读入内存一次，后续扫描不会重新读盘。如需清空全部历史，必须**先完全退出 DeepSeek Harness，删除缓存文件，再重启应用**——详见[性能与缓存](#性能与缓存)。请把缓存视为本机数据，未经检查不要附到公开 issue。
+
 ## 性能与缓存
 
 - 每个会话的折叠结果缓存在 `<profile>/plugin-state/usage-stats-cache.json`；已移除会话的条目会保留（`retiredAt`），因此缓存会随删除缓慢增长。缓存以「临时文件 + rename」原子写入。
@@ -53,34 +68,86 @@ DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展�
 - 扫描有边界：最多 4 个并发会话读取、120 秒后中止、并发调用合并为一次扫描；Client 对 Remote 调用设有 60 秒看门狗。
 - 插件激活 5 秒后后台预热一次，打开页面通常即为缓存命中。
 - 缓存版本变化时自动迁移：v2 缓存会原地升级为 v3，不会触发全量重读；更旧的版本（v1 及未知）与损坏文件才会丢弃重建。
-- 按会话列表不使用单独的标题缓存：标题每次统计时取自宿主的会话投影结果（零额外日志读取），归档集合也每次从 Workspace 注册表读取，因此本次功能没有改变折叠缓存结构与版本（仍为 v3）。归档或取消归档、删除会话后需要重新统计（重新打开页面或点「刷新」）才会反映到列表。
+- 按会话列表不使用单独的标题缓存：标题每次统计时取自宿主的会话投影结果（零额外日志读取），归档集合也每次从 Workspace 注册表读取，因此折叠缓存结构与版本保持不变（仍为 v3）。归档或取消归档、删除会话后需要重新统计（重新打开页面或点「刷新」）才会反映到列表。
 - 宿主缺少 Workspace 注册表（无法判断归档状态）时，响应不包含按会话列表，页面不显示该卡片；宿主没有会话列表服务或标题读取失败时只少标题，其他统计不受影响。
 - 如需清空全部历史：**先完全退出 DeepSeek Harness，删除缓存文件，再重启应用**。宿主运行中删除文件不会清掉内存缓存；下一次扫描（尤其是刷新）会把保留历史重新写回。重启后插件会按现存日志重新统计。
 - Host 侧失败以 `{ error: { code, message } }` 返回，错误码为 `stats-unavailable`、`scan-failed` 或 `bad-request`。
 
 ## 安装
 
+先打开一次 DeepSeek Harness 桌面版，让其 `desktop` profile 完成初始化，然后完全退出应用，再执行任何 `dsh plugin --profile desktop ...` 命令。该命令会管理 profile，不能在应用仍使用 profile 时运行。
+
 从 GitHub 安装：
 
 ```sh
-dsh plugin --profile desktop add https://github.com/ailawu0409/dsh-usage-stats
+dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats
 ```
 
-也可以使用本地包路径或你 fork 的仓库地址：
+如需安装指定版本，可使用对应标签，例如：
 
 ```sh
-dsh plugin --profile desktop add <包路径或仓库地址>
+dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats#v0.3.0
 ```
 
-或在本地开发时把包目录加入 profile：
+本地开发时，把包目录加入 profile：
 
 ```sh
 dsh plugin --profile desktop add /path/to/dsh-usage-stats
 ```
 
-重启 DeepSeek Harness 后打开 **设置 → 使用统计**（位于「归档管理」下方）。
+安装你 fork 的仓库时使用 `github:<你的账号>/dsh-usage-stats`。重启 DeepSeek Harness 后打开 **设置 → 使用统计**（位于「归档管理」下方）。如果使用 `desktop` 以外的 profile，请在以上命令中统一替换 `desktop`。
 
-已在 DeepSeek Harness 0.2.2-rc.3 上验证。建议使用 DeepSeek Harness 0.2.2-rc.1 或更新版本以显示自定义导航图标；更旧的宿主会显示默认设置齿轮，但不会报错。
+### 升级
+
+先备份重要的本机数据，完全退出 DeepSeek Harness，再次执行安装命令获取目标版本，然后重启应用。升级前请查看[发布说明](https://github.com/ailawu0409/dsh-usage-stats/releases)。升级不会主动清空现有插件缓存文件。
+
+### 卸载
+
+先完全退出 DeepSeek Harness，再移除插件并重启：
+
+```sh
+dsh plugin --profile desktop remove dsh-usage-stats
+```
+
+移除插件不会删除缓存文件。若同时想清除本机统计数据，请在应用未运行时删除 `<profile>/plugin-state/usage-stats-cache.json`。
+
+## 使用
+
+### 概览
+
+页面顶部显示三项指标：**累计 Token 数**（全部折叠历史）、**峰值 Token 数**（单日最高）和**最长聊天时长**（已完成的轮次累计）。这三项始终是全量历史口径，不随趋势图的「近 7 日 / 近 30 日」切换。
+
+### Token 活动热力图
+
+在卡片右上角选择「每日」「每周」或「累计」。每日按当天 Token 着色；每周按整列（当周）合计着色；累计按截至当天的累计值着色。悬停格子可查看日期与当前口径下的数值。摘要行同样跟随模式，并且只统计网格实际画出的区间。格子固定为 11px，网格在面板宽度内显示 13–53 周，因此窄面板会减少周数而不是缩小格子。
+
+### 每日 Token 趋势
+
+在图表上方选择「近 7 日」或「近 30 日」。图表绘制含今天在内的 8 / 31 个点，日期轴最多 8 个标签。折线按模型分色，只绘制所选区间内用量最高的 6 个模型，悬停明细也只列这 6 条序列；其余模型仍会出现在环形图的「其他模型」中。
+
+### 模型用量
+
+环形图显示前 5 个模型加一个聚合的「其他模型」段。悬停某段可查看对应 Token 与占比；右侧列表显示相同的占比。
+
+### 会话用量
+
+卡片按 Token 用量从高到低列出未归档会话，超过 200 条时在卡片内滚动。每行显示会话标题、最近活跃日期和相对最高用量会话的占比条。已归档、已删除和子智能体会话不在此列表，但其用量仍计入上方的累计指标。没有标题的会话显示为「未命名会话 · 短 id」。
+
+列表反映最近一次统计时的归档状态。在宿主归档界面归档、取消归档或删除会话后，请重新打开本页或点击「刷新」更新列表。宿主 Workspace 注册表不可用时，该卡片隐藏，其余统计不受影响。
+
+### 刷新与状态
+
+右下角 sticky「刷新」按钮触发对当前列表中所有会话的全量重扫，不只是重绘。扫描期间按钮显示「统计中…」并禁用。页面在首次加载时显示骨架和「正在统计用量…」，没有用量时显示空状态，首次加载失败时显示整页错误和重试按钮，已有数据但刷新失败时在顶部显示可重试 banner 并保留旧数据；渲染错误由错误边界兜底并提供重试。
+
+## 常见问题
+
+- **设置里看不到「使用统计」**：确认包已安装到当前 profile，并重启 DeepSeek Harness。0.2.2 及以上版本会显示插件的柱状图导航图标；更旧的宿主显示默认齿轮是正常现象。
+- **页面提示无法读取用量统计**：Client 无法挂载或调用 Host Remote。刷新页面、确认宿主版本和 profile 插件后重启 DeepSeek Harness。
+- **有会话被跳过**：某个日志无法读取或被标记为 `migration-required`；插件会保留上次结果，只把从未统计过的会话计入跳过。失败读取会冷却 5 分钟，之后或点击「刷新」时会重试。
+- **刷新失败但旧数字还在**：这是有意的设计——刷新失败不得清空已有数据。请重试；如果持续失败，重启应用。
+- **会话用量卡片缺失或未更新**：宿主可能没有提供 Workspace 注册表的归档集合，或页面尚未重新统计。点击「刷新」；如果注册表不可用，卡片会保持隐藏，但其他统计不受影响。
+- **清空历史没有生效**：必须先完全退出 DeepSeek Harness，再删除 `<profile>/plugin-state/usage-stats-cache.json` 并重启。运行中删除文件不会清掉内存缓存，下一次扫描会把历史重新写回。
+- **数字与其他用量工具不同**：本插件优先用 `usage.totalTokens`，否则用 `inputTokens + outputTokens`；ZCode 的 `computedTotalTokens` 是 `input + cache + output`，两者数值可能不同，详见「已知限制」。
 
 ## 开发
 
@@ -105,25 +172,24 @@ npm pack --dry-run  # 检查实际发布内容
 | `icon.svg` | 插件图标 |
 | `package.json` | 包导出、DSH 插件配置、`files` 清单与开发脚本 |
 | `test/host.test.mjs`、`test/client.test.mjs` | Host / Client 测试（仅仓库内） |
-| `AGENT.md` | 开发代理指南（中文，仅仓库内） |
+| `AGENTS.md` | 开发代理指南（中文，仅仓库内） |
 | `CONTRIBUTING.md`、`SECURITY.md` | 贡献指南与安全策略（仅仓库内） |
 | `.github/workflows/ci.yml` | CI 矩阵与包内容检查（仅仓库内） |
 
-`npm pack --dry-run` 实际发布 10 个文件：`index.js`、`client.js`、`cordis.patch.yml`、`locale/en.json`、`locale/zh.json`、`icon.svg`，以及 npm 自动带入的 `package.json`、`LICENSE`、`README.md`、`README.zh-CN.md`。`AGENT.md`、`CONTRIBUTING.md`、`SECURITY.md`、CI 配置与测试只留在仓库中。
+`npm pack --dry-run` 实际发布 10 个文件：`index.js`、`client.js`、`cordis.patch.yml`、`locale/en.json`、`locale/zh.json`、`icon.svg`，以及 npm 自动带入的 `package.json`、`LICENSE`、`README.md`、`README.zh-CN.md`。`AGENTS.md`、`CONTRIBUTING.md`、`SECURITY.md`、CI 配置与测试只留在仓库中。
 
-## 已知取舍
+## 已知限制
 
 - 删除会话不会减少历史累计（有意设计）：这是为了避免「删掉会话后数字变小」的不合理行为。本版本之前已被删除的会话无法恢复（其折叠记录已随旧缓存清理）。
-- 清空历史必须完全重启宿主：缓存只在启动时加载，运行中删除缓存文件不会生效。详见「性能与缓存」。
+- 清空历史必须完全重启宿主：缓存只在启动时加载，运行中删除缓存文件不会生效。详见[性能与缓存](#性能与缓存)。
 - Token 口径与 ZCode 不同：本插件优先用 `usage.totalTokens`，否则 `inputTokens + outputTokens`；ZCode 的 `computedTotalTokens` 是 `input + cache + output`，两者数值可能不同。
 - ZCode 的原始用量明细默认只保留 30 天，本插件保留终身累计，仅每日明细限制为约 400 天回看（今天 + 前 400 天），用于热力图与趋势图。
 - 「近 7 日」趋势图绘制 8 个点、「近 30 日」绘制 31 个点（今天 + 之前各天），与参考设计一致；日期轴最多显示 8 个标签。
 - 趋势图最多绘制 6 条模型序列（按所选区间内用量排名），其余模型只在环形图的「其他模型」中体现。
 - 20000 上限只作用于单次扫描的当前列表会话，不作用于保留历史，因此底部会话数可能更高。
-- 「会话用量」列表最多显示 200 行，且只反映最近一次统计时的归档状态：在「归档管理」里归档/取消归档或删除会话后，需要回到本页点击「刷新」才会更新。列表依赖宿主的 Workspace 注册表；该服务不可用时卡片不显示，其余统计不受影响。
+- 「会话用量」列表最多显示 200 行，且只反映最近一次统计时的归档状态。列表依赖宿主的 Workspace 注册表；该服务不可用时卡片不显示，其余统计不受影响。
 - 设置面板较窄时会减少热力图周数而不是缩小格子，因此窄面板看不到完整一年。
-- 设置导航图标通过宿主 0.2.2 提供的 `settings.section.icon` slot 注册（注册 id 与 section id 一致）；0.2.2 之前的宿主没有该入口，会显示默认设置齿轮，但不会报错。
-- 0.2.2 起宿主新增德语、西班牙语、法语、日语、葡萄牙语、俄语界面；本插件文案仍只提供中英文，其他语言由宿主回退到英文。
+- 当累计 Token 为 0 时页面显示空状态；已有缓存历史的安装在源会话消失后仍可能保留数字。
 
 ## 贡献与安全
 
