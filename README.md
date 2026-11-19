@@ -8,7 +8,7 @@ A community plugin for DeepSeek Harness that adds a **Usage Statistics** section
 
 > **Unofficial plugin:** Not affiliated with or endorsed by DeepSeek. DSH extension APIs may change between releases.
 >
-> **Version note:** the version in `package.json` (currently `0.3.1`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes below are advisory.
+> **Version note:** the version in `package.json` (currently `0.3.2`) is the plugin version, not the host version. The manifest declares no host version constraint, so the compatibility notes below are advisory.
 
 ## Features
 
@@ -25,7 +25,7 @@ A community plugin for DeepSeek Harness that adds a **Usage Statistics** section
 
 ## Compatibility
 
-- Verified against DeepSeek Harness `0.2.2-rc.3` (desktop). The plugin relies only on contracts that are unchanged since `0.2.2-rc.1`, so rc.1 and rc.2 are expected to behave the same; `0.2.2-rc.1` or newer is recommended. On hosts that lack the Workspace registry or session-list service, the per-session card or titles are unavailable, but the other statistics still work.
+- Verified against DeepSeek Harness `0.2.2-rc.5` (desktop). The plugin relies only on contracts that are unchanged since `0.2.2-rc.1`, so rc.1 through rc.4 are expected to behave the same (runtime verification for this release covers rc.5); `0.2.2-rc.5` or newer is recommended. On hosts that lack the Workspace registry or session-list service, the per-session card or titles are unavailable, but the other statistics still work.
 - On DeepSeek Harness 0.2.2 and newer, the Settings navigation icon is registered through the official `settings.section.icon` slot (section id `usage-stats`, order 101). Hosts older than 0.2.2 do not have that seat and show the default gear without error.
 - Node.js 22 or newer for local development and tests. CI runs Node.js 22 and 24; there are no third-party runtime dependencies and no build step.
 - The Settings UI is available in English and Chinese. Other host languages introduced in DSH 0.2.2 fall back to English for this plugin's text.
@@ -84,7 +84,7 @@ dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats
 To install a specific release, use its tag, for example:
 
 ```sh
-dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats#v0.3.1
+dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats#v0.3.2
 ```
 
 For local development, link the package directory into the profile:

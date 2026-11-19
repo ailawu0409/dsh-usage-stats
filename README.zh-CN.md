@@ -10,7 +10,7 @@ DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展�
 
 > **非官方插件：** 与 DeepSeek 官方无隶属关系，也未经其背书。DSH 扩展 API 可能随版本变化。
 >
-> **版本说明：** `package.json` 中的版本号（当前 `0.3.1`）是插件版本，不是宿主版本；清单未声明宿主版本约束，因此下方兼容性说明仅供参考。
+> **版本说明：** `package.json` 中的版本号（当前 `0.3.2`）是插件版本，不是宿主版本；清单未声明宿主版本约束，因此下方兼容性说明仅供参考。
 
 ## 功能
 
@@ -27,7 +27,7 @@ DeepSeek Harness 的设置面板插件：在「设置 → 使用统计」中展�
 
 ## 兼容性
 
-- 已在 DeepSeek Harness `0.2.2-rc.3`（桌面版）上验证。插件只依赖 `0.2.2-rc.1` 以来未变化的契约，因此 rc.1、rc.2 预期与 rc.3 行为一致；建议使用 `0.2.2-rc.1` 或更新版本。宿主缺少 Workspace 注册表或会话列表服务时，按会话卡片或标题不可用，但其余统计仍可正常工作。
+- 已在 DeepSeek Harness `0.2.2-rc.5`（桌面版）上验证。插件只依赖 `0.2.2-rc.1` 以来未变化的契约，因此 rc.1 至 rc.4 预期与 rc.5 行为一致（本次运行验证覆盖 rc.5）；建议使用 `0.2.2-rc.5` 或更新版本。宿主缺少 Workspace 注册表或会话列表服务时，按会话卡片或标题不可用，但其余统计仍可正常工作。
 - DeepSeek Harness 0.2.2 及以上通过官方 `settings.section.icon` slot 注册设置导航图标（section id `usage-stats`、order 101）。0.2.2 之前的宿主没有该入口，会显示默认设置齿轮，但不会报错。
 - 本地开发和测试需要 Node.js 22 或更高版本。CI 在 Node.js 22 和 24 上运行；无第三方运行时依赖，也无构建步骤。
 - 设置界面提供中英文文案；0.2.2 新增的其他宿主语言对本插件回退到英文。
@@ -86,7 +86,7 @@ dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats
 如需安装指定版本，可使用对应标签，例如：
 
 ```sh
-dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats#v0.3.1
+dsh plugin --profile desktop add github:ailawu0409/dsh-usage-stats#v0.3.2
 ```
 
 本地开发时，把包目录加入 profile：

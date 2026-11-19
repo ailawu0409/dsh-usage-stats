@@ -299,7 +299,7 @@ window.__ModuleLoader__.load({
     /** Fallbacks used only if the slot stops supplying the injected hooks. */
     const MISSING_STATS = Object.freeze({ status: 'error', stats: null, error: null, busy: false })
     const MISSING_THEME = Object.freeze({ scheme: 'light' })
-    const MISSING_LOCALE = Object.freeze({ id: 'zh' })
+    const MISSING_LOCALE = Object.freeze({ active: 'zh' })
 
     /** Measure an element's content width; returns [ref, width]. */
     function useElementWidth() {
@@ -360,10 +360,12 @@ window.__ModuleLoader__.load({
     /**
      * Whether the active locale is Chinese. Takes the locale snapshot the slot
      * hands to the component (the `hooks.locale` store projected by the shell).
+     * Current hosts expose `active`; older hosts may still provide `id`.
      */
     function isChinese(localeSnapshot) {
-      const id = typeof localeSnapshot?.id === 'string' ? localeSnapshot.id : 'zh'
-      return id.toLowerCase().startsWith('zh')
+      const active = typeof localeSnapshot?.active === 'string' ? localeSnapshot.active : undefined
+      const legacy = typeof localeSnapshot?.id === 'string' ? localeSnapshot.id : undefined
+      return (active ?? legacy ?? 'zh').toLowerCase().startsWith('zh')
     }
 
     /** Trim one rounded decimal (`2.50` → `2.5`, `3.0` → `3`). */
@@ -1807,6 +1809,7 @@ window.__ModuleLoader__.load({
         CHART_PATHS,
         SectionNavIcon,
         UsageStatsView,
+        isChinese,
         TokenActivityCard,
         TrendCard,
         ModelUsageCard,

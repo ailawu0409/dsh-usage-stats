@@ -12,8 +12,8 @@ dsh-usage-stats 是一个非官方的 DeepSeek Harness 设置面板插件，在�
 
 | 项目 | 当前情况 |
 | --- | --- |
-| npm 包名 / 版本 | `dsh-usage-stats` / `0.3.1`（插件版本，与宿主版本无关） |
-| 已验证宿主 | DeepSeek Harness `0.2.2-rc.3` Desktop；`0.2.2-rc.1` 起的接口契约未变化，建议使用 rc.1 或更新版本 |
+| npm 包名 / 版本 | `dsh-usage-stats` / `0.3.2`（插件版本，与宿主版本无关） |
+| 已验证宿主 | DeepSeek Harness `0.2.2-rc.5` Desktop；`0.2.2-rc.1` 起的接口契约未变化，建议使用 rc.5 或更新版本 |
 | 导航图标 | DSH `0.2.2` 起提供 `settings.section.icon`；更旧宿主保留默认齿轮且不报错 |
 | 运行时 | JavaScript ES Modules，Node.js `>= 22`；无第三方运行时依赖、无构建步骤 |
 | 测试与 CI | `test/host.test.mjs`、`test/client.test.mjs`；CI 覆盖 ubuntu/windows × Node 22/24 与 package 内容检查 |
@@ -110,7 +110,7 @@ Host 端不得在 Client 中复用；Client 只消费 Remote 返回的 `stats`�
 - `settings.section`：id `usage-stats`、order `101`、locale `usage-stats`，`inject()` 返回 `actions`（`refresh`）与 `hooks: { stats, colorScheme, locale }`；宿主转成 `useStats` / `useColorScheme` / `useLocale`。
 - `settings.section.icon`：同一 id `usage-stats`，组件只画柱状图图标，不修改宿主 DOM；宿主未提供 slot 时保留默认齿轮。
 - 主题：`ctx.get('theme').getTheme().active.colorScheme` + `theme/change` 事件，取不到回退 `light`。
-- 国际化：`ctx.locale.register('usage-stats', { zh, en })` + `ctx.locale.bind('usage-stats')`；`localeSnapshot.id` 以 `zh` 前缀判定中文，其余语言由宿主回退英文。
+- 国际化：`ctx.locale.register('usage-stats', { zh, en })` + `ctx.locale.bind('usage-stats')`；`localeSnapshot.active`（兼容旧版 `id`）以 `zh` 前缀判定中文，其余语言由宿主回退英文。
 
 ## 宿主端实现
 

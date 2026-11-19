@@ -459,7 +459,7 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   const page = helpers.UsageStatsView({
     useStats: (selector) => selector({ status: 'ready', stats, error: null, busy: false }),
     useColorScheme: (selector) => selector({ scheme: 'dark' }),
-    useLocale: (selector) => selector({ id: 'zh' }),
+    useLocale: (selector) => selector({ active: 'zh' }),
     actions: { refresh: async () => {} },
     t,
   })
@@ -564,7 +564,7 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
         busy: false,
       }),
     useColorScheme: (selector) => selector({ scheme: 'light' }),
-    useLocale: (selector) => selector({ id: 'en' }),
+    useLocale: (selector) => selector({ active: 'en' }),
     actions: { refresh: async () => {} },
     t,
   })
@@ -586,7 +586,7 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
     helpers.UsageStatsView({
       useStats: (selector) => selector({ status: 'ready', stats: { ...stats, sessions }, error: null, busy: false }),
       useColorScheme: (selector) => selector({ scheme: 'light' }),
-      useLocale: (selector) => selector({ id: 'zh' }),
+      useLocale: (selector) => selector({ active: 'zh' }),
       actions: { refresh: async () => {} },
       t,
     })
@@ -638,7 +638,7 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   const withData = helpers.UsageStatsView({
     useStats: (selector) => selector({ status: 'error', stats, error: 'boom', busy: false }),
     useColorScheme: (selector) => selector({ scheme: 'light' }),
-    useLocale: (selector) => selector({ id: 'zh' }),
+    useLocale: (selector) => selector({ active: 'zh' }),
     actions: { refresh: async () => {} },
     t,
   })
@@ -653,7 +653,7 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   const withoutData = helpers.UsageStatsView({
     useStats: (selector) => selector({ status: 'error', stats: null, error: 'boom', busy: false }),
     useColorScheme: (selector) => selector({ scheme: 'light' }),
-    useLocale: (selector) => selector({ id: 'zh' }),
+    useLocale: (selector) => selector({ active: 'zh' }),
     actions: { refresh: async () => {} },
     t,
   })
@@ -690,7 +690,7 @@ assert.equal(helpers.clampTipX(40, 200, 260), 100, 'a narrow container centers t
   const page = helpers.UsageStatsView({
     useStats: (selector) => selector({ status: 'ready', stats, error: null, busy: false }),
     useColorScheme: (selector) => selector({ scheme: 'light' }),
-    useLocale: (selector) => selector({ id: 'zh' }),
+    useLocale: (selector) => selector({ active: 'zh' }),
     actions: { refresh: async () => {} },
     t,
   })
@@ -842,7 +842,7 @@ const locale = {
     }
   },
   getSnapshot() {
-    return { id: 'zh', revision: 0 }
+    return { active: 'zh', revision: 0 }
   },
   subscribe() {
     return () => {}
@@ -941,7 +941,7 @@ assert.equal(injected.hooks.stats.getSnapshot().status, 'ready')
 assert.equal(injected.hooks.stats.getSnapshot().stats.totals.tokens, 100)
 assert.equal(injected.hooks.colorScheme.getSnapshot().scheme, 'dark')
 assert.equal(typeof injected.hooks.locale.getSnapshot, 'function')
-assert.equal(injected.hooks.locale.getSnapshot().id, 'zh')
+assert.equal(injected.hooks.locale.getSnapshot().active, 'zh')
 assert.equal(typeof sectionRegistration.component, 'function')
 
 const iconRegistration = registrations.find((entry) => entry.options.name === 'settings.section.icon')
@@ -960,7 +960,7 @@ assert.deepEqual(requests, [{ action: 'getStats' }, { action: 'refresh' }])
   const view = helpers.UsageStatsView({
     useStats: (selector) => selector(snapshot),
     useColorScheme: (selector) => selector({ scheme: 'dark' }),
-    useLocale: (selector) => selector({ id: 'zh' }),
+    useLocale: (selector) => selector({ active: 'zh' }),
     actions: injected.actions,
     t: (key, parameters) => (parameters === undefined ? key : `${key}(${JSON.stringify(parameters)})`),
   })
@@ -973,6 +973,39 @@ assert.deepEqual(requests, [{ action: 'getStats' }, { action: 'refresh' }])
     children.some((child) => child !== null && child !== undefined && child.type === helpers.SessionUsageCard),
     'the per-session card is part of the page',
   )
+}
+
+// The host locale hook supplies a LocaleSnapshot with `active`; keep the
+// legacy `id` fallback for older hosts and the Chinese default when absent.
+{
+  assert.equal(helpers.isChinese({ active: 'en' }), false)
+  assert.equal(helpers.isChinese({ active: 'zh-CN' }), true)
+  assert.equal(helpers.isChinese({ id: 'en' }), false, 'legacy id fallback stays supported')
+  assert.equal(helpers.isChinese(undefined), true, 'missing snapshots keep the Chinese default')
+  assert.equal(helpers.isChinese({ active: 'zh-Hans' }), true)
+
+  // Keep the wiring covered, not just the helper: the view must pass the
+  // locale-derived `chinese` flag down to the token formatter.
+  const localizedStats = {
+    today: '2026-11-03',
+    totals: { tokens: 150_000_000, peakDay: '2026-11-03', peakTokens: 150_000_000, longestChatMs: 0 },
+    daily: [],
+    models: [],
+    sessions: { total: 0, counted: 0, skipped: 0 },
+  }
+  const render = (localeSnapshot) => JSON.stringify(
+    helpers.UsageStatsView({
+      useStats: (selector) => selector({ status: 'ready', stats: localizedStats, error: null, busy: false }),
+      useColorScheme: (selector) => selector({ scheme: 'light' }),
+      useLocale: (selector) => selector(localeSnapshot),
+      actions: { refresh: async () => {} },
+      t: (key) => key,
+    }),
+    (key, value) => (typeof value === 'function' ? '[fn]' : value),
+  )
+  assert.ok(render({ active: 'en' }).includes('\"M\"'), 'English locale uses compact M units')
+  assert.ok(!render({ active: 'en' }).includes('\"亿\"'), 'English locale does not use Chinese units')
+  assert.ok(render({ active: 'zh-CN' }).includes('\"亿\"'), 'Chinese locale uses 亿 units')
 }
 
 // A missing hook degrades to the error card instead of crashing.
